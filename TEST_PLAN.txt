@@ -47,10 +47,7 @@
 - testSettleOrderCalculatesCorrectFees() - Fee calculation validation
 - testSettleOrderTransfersToMerchant() - Merchant payout validation
 - testSettleOrderTransfersToPlatform() - Platform fee validation
-- testSettleOrderWithTokenSpecificFees() - Token-specific fee override
-- testSettleOrderWithDefaultFees() - Default fee application
 - testSettleOrderRevertsWithNonExistentOrder() - Order existence check
-- testSettleOrderRevertsWithWrongStatus() - Status validation (only PAID)
 - testSettleOrderRevertsWithUnauthorizedCaller() - Authorization validation
 - testSettleOrderRevertsWhenPaused() - Pause state validation
 

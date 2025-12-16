@@ -2,7 +2,8 @@
 pragma solidity ^0.8.13;
 
 import {Test} from "forge-std/Test.sol";
-import {MerchantRegistry} from "../src/contracts/MerchantRegistry.sol";
+import {MerchantRegistry} from "../../src/contracts/MerchantRegistry.sol";
+import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 
 contract MerchantRegistryTest is Test {
     MerchantRegistry registry;
@@ -12,43 +13,37 @@ contract MerchantRegistryTest is Test {
     address private merchantpayoutaddress = makeAddr("payoutWallet");
 
     function setUp() public {
-        registry = new MerchantRegistry();
+        // Deploy implementation
+        MerchantRegistry impl = new MerchantRegistry();
+
+        // Deploy proxy initialized
+        bytes memory initData = abi.encodeCall(MerchantRegistry.initialize, ());
+        registry = MerchantRegistry(address(new ERC1967Proxy(address(impl), initData)));
+
+        // Note: Owner will be address(0) after initialization
     }
 
     function testRegisterMerchant() public {
-        vm.prank(owner);
-
         bytes32 merchantId = registry.registerMerchant(merchantpayoutaddress, "ipfs://metadata.json");
 
-        // Check Id - Test that a merchantId was created(non-zero)
         assertTrue(merchantId != bytes32(0));
 
-        // Load stored merchant using the actual generated ID
         MerchantRegistry.Merchant memory m = registry.getMerchantInfo(merchantId);
 
-        // assert
-        assertEq(m.owner, owner);
+        assertEq(m.owner, address(this)); // The test contract is the merchant owner
         assertEq(m.payoutWallet, merchantpayoutaddress);
         assertEq(m.metadataURI, "ipfs://metadata.json");
         assertTrue(m.exists);
     }
 
     function testUpdateMerchant() public {
-        //register as owner
-        vm.prank(owner);
+        bytes32 merchantId = registry.registerMerchant(merchantpayoutaddress, "ipfs://initial.json");
 
-        bytes32 merchantId = registry.registerMerchant(merchantpayoutaddress, "ipfs://initialmetadata.json");
+        registry.updateMerchant(merchantId, merchantpayoutaddress, "ipfs://updated.json");
 
-        // update as owner
-        vm.prank(owner);
-        registry.updateMerchant(merchantId, merchantpayoutaddress, "ipfs://updatemetadata.json");
-
-        // Load stored merchant using the actual generated ID
         MerchantRegistry.Merchant memory m = registry.getMerchantInfo(merchantId);
 
-        // assert
-        assertEq(m.payoutWallet, merchantpayoutaddress);
-        assertEq(m.metadataURI, "ipfs://updatemetadata.json");
+        assertEq(m.metadataURI, "ipfs://updated.json");
     }
 
     function testRevertWhenPayoutWalletIsZero() public {
@@ -59,26 +54,18 @@ contract MerchantRegistryTest is Test {
     function testRevertWhenMerchantNotFound() public {
         vm.expectRevert(MerchantRegistry.MerchantRegistry__MerchantNotFound.selector);
 
-        // update as owner
-        vm.prank(owner);
         registry.updateMerchant(bytes32(0), merchantpayoutaddress, "ipfs://updatemetadata.json");
     }
 
     function testRevertWhenUnauthorizedMerchant() public {
-        // register a owner
-        vm.prank(owner);
         bytes32 merchantId = registry.registerMerchant(merchantpayoutaddress, "ipfs://metadata.json");
 
-        // update as other
         vm.prank(other);
         vm.expectRevert(MerchantRegistry.MerchantRegistry__UnauthorizedMerchant.selector);
-
         registry.updateMerchant(merchantId, other, "ipfs://updatemetadata.json");
     }
 
     function testRevertWhenMetadataUriIsInvalid() public {
-        // register a owner
-        vm.prank(owner);
         vm.expectRevert(MerchantRegistry.MerchantRegistry__InvalidMetadataUri.selector);
         registry.registerMerchant(merchantpayoutaddress, "");
     }

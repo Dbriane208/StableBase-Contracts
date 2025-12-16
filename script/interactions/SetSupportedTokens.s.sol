@@ -15,43 +15,41 @@ contract SetSupportedTokens is Script {
         NetworkConfig.NetworkInfo memory config = networkConfig.getCurrentNetworkConfig();
 
         // Loading deployment addresses
-        string memory deploymentFile = string(
-            abi.encodePacked("./deployments/",config.name,"/deployment.json")
-        );
+        string memory deploymentFile = string(abi.encodePacked("./deployments/", config.name, "/deployment.json"));
         string memory json = vm.readFile(deploymentFile);
         address paymentProcessor = json.readAddress(".paymentProcessor");
 
         vm.startBroadcast(config.deployerKey);
 
-        _setSupportedTokens(paymentProcessor,config);
+        _setSupportedTokens(paymentProcessor, config);
 
         vm.stopBroadcast();
 
         console2.log("Supported tokens configuration completed");
     }
 
-    function _setSupportedTokens(address paymentProcessor,NetworkConfig.NetworkInfo memory config) internal {
+    function _setSupportedTokens(address paymentProcessor, NetworkConfig.NetworkInfo memory config) internal {
         PaymentProcessor processor = PaymentProcessor(paymentProcessor);
 
         address[] memory tokens = new address[](3);
         uint256[] memory statuses = new uint256[](3);
         uint256 count = 0;
 
-        if(config.usdc != address(0)){
+        if (config.usdc != address(0)) {
             tokens[count] = config.usdc;
             statuses[count] = 1; // supported
             count++;
             console2.log("Adding USDC support: ", config.usdc);
         }
 
-        if(config.usdt != address(0)){
+        if (config.usdt != address(0)) {
             tokens[count] = config.usdt;
             statuses[count] = 1;
             count++;
             console2.log("Adding USDT support: ", config.usdt);
         }
 
-        if(config.cusd != address(0)){
+        if (config.cusd != address(0)) {
             tokens[count] = config.cusd;
             statuses[count] = 1;
             count++;
@@ -59,9 +57,8 @@ contract SetSupportedTokens is Script {
         }
 
         // Batch update token support
-        for (uint256 i =0; i< count; i++) {
+        for (uint256 i = 0; i < count; i++) {
             processor.setTokenSupport(tokens[i], statuses[i]);
         }
     }
-
 }

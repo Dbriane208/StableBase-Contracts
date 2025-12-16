@@ -6,7 +6,6 @@ import {console2} from "forge-std/console2.sol";
 import {PaymentProcessor} from "../../src/contracts/PaymentProcessor.sol";
 import {MerchantRegistry} from "../../src/contracts/MerchantRegistry.sol";
 import {TokensManager} from "../../src/contracts/TokensManager.sol";
-import {IMerchantRegistry} from "../../src/interfaces/IMerchantRegistry.sol";
 import {NetworkConfig} from "../NetworkConfig.s.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
@@ -37,10 +36,10 @@ contract PostDeploymentValidator is Script {
 
         // Basic validations
         _validateBasics(paymentProcessor, merchantRegistry);
-        
+
         // Token and fee validations
         _validateTokensAndFees(paymentProcessor, expectedTokens);
-        
+
         // Configuration validations
         _validateConfigurations(paymentProcessor);
 
@@ -124,7 +123,7 @@ contract PostDeploymentValidator is Script {
 
         for (uint256 i = 0; i < expectedTokens.length; i++) {
             address token = expectedTokens[i];
-            
+
             if (token == address(0)) continue; // Skip zero address tokens
 
             // Check if token is supported
@@ -161,27 +160,9 @@ contract PostDeploymentValidator is Script {
                 revert PostDeploymentValidator__FeeValidationFailed();
             }
             console2.log("[OK] Default platform fee:", defaultFee, "bps");
+            console2.log("[OK] All tokens will use the default platform fee");
         } catch {
             revert PostDeploymentValidator__FeeValidationFailed();
-        }
-
-        // Check token-specific fees
-        for (uint256 i = 0; i < tokens.length; i++) {
-            address token = tokens[i];
-            
-            if (token == address(0)) continue;
-
-            try processor.getTokenFeeSettings(token) returns (TokensManager.TokenFeeSettings memory feeSettings) {
-                if (feeSettings.platformFeeBps > REASONABLE_MAX_FEE_BPS) {
-                    console2.log("[ERROR] Excessive fee for token:", token, "Fee:", feeSettings.platformFeeBps);
-                    revert PostDeploymentValidator__FeeValidationFailed();
-                }
-                
-                console2.log("[OK] Token fee configured for:", token);
-                console2.log("Fee:", feeSettings.platformFeeBps, "bps");
-            } catch {
-                console2.log("[WARNING] No specific fee settings for token:", token);
-            }
         }
     }
 
@@ -203,7 +184,7 @@ contract PostDeploymentValidator is Script {
         }
 
         // Validate merchant registry connection
-        try processor.merchantRegistry() returns (IMerchantRegistry registry) {
+        try processor.merchantRegistry() returns (MerchantRegistry registry) {
             if (address(registry) == address(0)) {
                 revert PostDeploymentValidator__InvalidConfiguration();
             }
@@ -250,20 +231,27 @@ contract PostDeploymentValidator is Script {
     /**
      * @notice Validates upgrade capabilities and proxy configuration
      */
-    function _validateUpgradeCapabilities(address /* paymentProcessor */) internal view {
+    function _validateUpgradeCapabilities(
+        address /* paymentProcessor */
+    )
+        internal
+        view
+    {
         console2.log("Validating upgrade capabilities...");
 
         // Check if contract is upgradeable (has proxy pattern)
         // This is indicated by the presence of an implementation slot
         bytes32 implementationSlot = 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc;
-        
+
         bytes32 implementation;
         assembly {
             implementation := sload(implementationSlot)
         }
 
         if (implementation != bytes32(0)) {
-            console2.log("[OK] Contract is upgradeable with implementation at:", address(uint160(uint256(implementation))));
+            console2.log(
+                "[OK] Contract is upgradeable with implementation at:", address(uint160(uint256(implementation)))
+            );
         } else {
             console2.log("[NOTE] Contract may not be upgradeable or uses different proxy pattern");
         }

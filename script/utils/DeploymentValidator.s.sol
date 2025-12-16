@@ -35,7 +35,7 @@ contract DeploymentValidator is Script {
         if (!_validatePaymentProcessor(paymentProcessor) || !_validateMerchantRegistry(merchantRegistry)) {
             revert DeploymentValidator__InterfaceValidationFailed();
         }
-        
+
         return true;
     }
 
@@ -84,12 +84,6 @@ contract DeploymentValidator is Script {
             // Check if token is supported
             if (!processor.isTokenSupported(token)) {
                 revert DeploymentValidator__TokenNotSupported();
-            }
-
-            // Check if token has fee settings
-            TokensManager.TokenFeeSettings memory feeSettings = processor.getTokenFeeSettings(token);
-            if (feeSettings.platformFeeBps == 0 && feeSettings.platformFeeBps >= MAX_BPS) {
-                revert DeploymentValidator__InvalidFeeSettings();
             }
 
             // Check if token contract is valid

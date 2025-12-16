@@ -114,7 +114,7 @@ contract TokenConfig is Script {
         });
     }
 
-    function getTokenInfo(uint256 chainId,string memory symbol) external view returns (TokenInfo memory) {
+    function getTokenInfo(uint256 chainId, string memory symbol) external view returns (TokenInfo memory) {
         return tokenConfigs[chainId][symbol];
     }
 
@@ -123,23 +123,23 @@ contract TokenConfig is Script {
         // Count tokens for this chain
         uint256 count = 0;
         string[] memory symbols = new string[](10); // Adjust size as needed
-        
+
         // Define known symbols to check
         symbols[0] = "USDC";
         symbols[1] = "USDT";
         symbols[2] = "cUSD";
-        
+
         // Count existing tokens
         for (uint256 i = 0; i < 3; i++) {
             if (tokenConfigs[chainId][symbols[i]].tokenAddress != address(0)) {
                 count++;
             }
         }
-        
+
         // Create result array
         TokenInfo[] memory tokens = new TokenInfo[](count);
         uint256 index = 0;
-        
+
         // Populate result array
         for (uint256 i = 0; i < 3; i++) {
             if (tokenConfigs[chainId][symbols[i]].tokenAddress != address(0)) {
@@ -147,7 +147,7 @@ contract TokenConfig is Script {
                 index++;
             }
         }
-        
+
         return tokens;
     }
 }

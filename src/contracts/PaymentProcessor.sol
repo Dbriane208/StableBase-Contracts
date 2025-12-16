@@ -3,10 +3,12 @@ pragma solidity ^0.8.13;
 
 import {IPaymentProcessor} from "../interfaces/IPaymentProcessor.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {PausableUpgradeable} from "openzeppelin-contracts-upgradeable/contracts/utils/PausableUpgradeable.sol";
 import {TokensManager} from "./TokensManager.sol";
 import {IMerchantRegistry} from "../interfaces/IMerchantRegistry.sol";
+import {MerchantRegistry} from "./MerchantRegistry.sol";
 import {Ownable2StepUpgradeable} from "openzeppelin-contracts-upgradeable/contracts/access/Ownable2StepUpgradeable.sol";
 
 /**
@@ -31,10 +33,9 @@ contract PaymentProcessor is
     error PaymentProcessor__InvalidStatus();
     error PaymentProcessor__UnauthorizedPayer();
     error PaymentProcessor__TransferFailed();
-    error PaymentProcessor__EthNotSupported();
     error PaymentProcessor__OrderExpired();
     error PaymentProcessor__InsufficientBalance();
-    error PaymentProcessor__SlippageExceeded();
+    error PaymentProcessor__UnverifiedMerchant();
     error PaymentProcessor__EmergencyWithdrawalFailed();
 
     // orders mapping
@@ -48,13 +49,10 @@ contract PaymentProcessor is
     // Order expiration time in seconds (default 24 hours)
     uint256 public orderExpirationTime;
 
-    // Maximum slippage allowed in BPS (default 1%)
-    uint256 public maxSlippageBps;
-
     // Emergency withdrawal enabled flag
     bool public emergencyWithdrawalEnabled;
 
-    IMerchantRegistry public merchantRegistry;
+    MerchantRegistry public merchantRegistry;
 
     //// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -68,8 +66,7 @@ contract PaymentProcessor is
         address _platformWallet,
         uint256 _defaultPlatformFeeBps,
         address _merchantRegistry,
-        uint256 _orderExpirationTime,
-        uint256 _maxSlippageBps
+        uint256 _orderExpirationTime
     ) external initializer {
         maxBps = 100_000;
 
@@ -82,11 +79,8 @@ contract PaymentProcessor is
         if (_merchantRegistry == address(0)) {
             revert PaymentProcessor__ThrowZeroAddress();
         }
-        if (_orderExpirationTime == 0) {
-            revert PaymentProcessor__InvalidAmount();
-        }
-        if (_maxSlippageBps > maxBps) {
-            revert PaymentProcessor__InvalidAmount();
+        if (_orderExpirationTime > 86400) {
+            revert PaymentProcessor__OrderExpired();
         }
 
         // initialize inherited contracts
@@ -96,9 +90,8 @@ contract PaymentProcessor is
 
         // initialize state
         defaultPlatformFeeBps = _defaultPlatformFeeBps;
-        merchantRegistry = IMerchantRegistry(_merchantRegistry);
+        merchantRegistry = MerchantRegistry(_merchantRegistry);
         orderExpirationTime = _orderExpirationTime;
-        maxSlippageBps = _maxSlippageBps;
         emergencyWithdrawalEnabled = false;
     }
 
@@ -151,14 +144,14 @@ contract PaymentProcessor is
         }
 
         // ensure merchant exist and cache payout wallet
-        IMerchantRegistry.Merchant memory m = merchantRegistry.getMerchantInfo(_merchantId);
+        MerchantRegistry.Merchant memory m = merchantRegistry.getMerchantInfo(_merchantId);
         if (!m.exists) {
             revert PaymentProcessor__InvalidStatus();
         }
 
         // Only allow orders for verified merchants
         if (m.verificationStatus != IMerchantRegistry.VerificationStatus.VERIFIED) {
-            revert PaymentProcessor__UnauthorizedPayer();
+            revert PaymentProcessor__UnverifiedMerchant();
         }
 
         // increase nonce to avoid replay attacks
@@ -259,11 +252,8 @@ contract PaymentProcessor is
         uint256 amount = o.amount;
         address token = o.token;
 
-        // compute fee  bps: token-specific overrides default if set
-        uint256 platformBps = tokenPlatformFeeBps(token);
-        if (platformBps == 0) {
-            platformBps = defaultPlatformFeeBps;
-        }
+        // Use default platform fee (2%)
+        uint256 platformBps = defaultPlatformFeeBps;
 
         // Calculate fees and net
         uint256 feeAmount = 0;
@@ -271,11 +261,6 @@ contract PaymentProcessor is
             feeAmount = (amount * platformBps) / maxBps;
         }
         uint256 netAmount = amount - feeAmount;
-
-        // Slippage protection: ensure fee doesn't exceed maximum allowed
-        if (feeAmount > (amount * maxSlippageBps) / maxBps) {
-            revert PaymentProcessor__SlippageExceeded();
-        }
 
         // Effects
         o.status = OrderStatus.SETTLED;
@@ -390,6 +375,30 @@ contract PaymentProcessor is
             revert PaymentProcessor__InvalidAmount();
         }
 
+        // Validate minimum amount based on token decimals
+        // For 6 decimal tokens (USDC, USDT): minimum 0.01 (10000 units)
+        uint8 decimals;
+        try IERC20Metadata(_token).decimals() returns (uint8 _decimals) {
+            decimals = _decimals;
+        } catch {
+            // Default to 18 if decimals() call fails
+            decimals = 18;
+        }
+
+        uint256 minAmount;
+        if (decimals == 6) {
+            minAmount = 10000; // 0.01 for 6 decimal tokens
+        } else if (decimals == 18) {
+            minAmount = 10 ** 16; // 0.01 for 18 decimal tokens
+        } else {
+            // For other decimal places, calculate minimum as 0.01
+            minAmount = 10 ** (decimals - 2);
+        }
+
+        if (_amount < minAmount) {
+            revert PaymentProcessor__InvalidAmount();
+        }
+
         // Enhanced validation: check for reasonable amount limits
         // Prevent extremely large amounts that could cause overflow
         if (_amount > type(uint128).max) {
@@ -426,7 +435,7 @@ contract PaymentProcessor is
             revert PaymentProcessor__ThrowZeroAddress();
         }
         address oldRegistry = address(merchantRegistry);
-        merchantRegistry = IMerchantRegistry(newRegistry);
+        merchantRegistry = MerchantRegistry(newRegistry);
         emit MerchantRegistryUpdated(oldRegistry, newRegistry);
     }
 
@@ -452,10 +461,6 @@ contract PaymentProcessor is
 
     function updateProtocolAddress(bytes32 what, address value) external onlyOwner {
         _updateProtocolAddress(what, value);
-    }
-
-    function setTokenFeeSettings(address token, uint256 platformFeeBps) external onlyOwner {
-        _setTokenFeeSettings(token, platformFeeBps);
     }
 
     /**
@@ -505,19 +510,6 @@ contract PaymentProcessor is
         emit OrderExpirationTimeUpdated(oldTime, newExpirationTime);
     }
 
-    /**
-     * @notice Update maximum slippage BPS
-     * @param newMaxSlippageBps New maximum slippage in basis points
-     */
-    function updateMaxSlippageBps(uint256 newMaxSlippageBps) external onlyOwner {
-        if (newMaxSlippageBps > maxBps) {
-            revert PaymentProcessor__InvalidAmount();
-        }
-        uint256 oldSlippage = maxSlippageBps;
-        maxSlippageBps = newMaxSlippageBps;
-        emit MaxSlippageBpsUpdated(oldSlippage, newMaxSlippageBps);
-    }
-
     /* ##################################################################
                                 GETTER FUNCTIONS
     ################################################################## */
@@ -529,7 +521,7 @@ contract PaymentProcessor is
     }
 
     /**
-     * @notice update default platform fee bps
+     * @notice get the order status
      */
     function getOrderStatus(bytes32 orderId) external view returns (OrderStatus) {
         if (!order[orderId].exists) {
@@ -622,16 +614,13 @@ contract PaymentProcessor is
 
     /**
      * @notice Calculate fee for a given amount and token
-     * @param token The token address
      * @param amount The amount to calculate fee for
      * @return feeAmount The calculated fee amount
      * @return netAmount The net amount after fee deduction
      */
-    function calculateFee(address token, uint256 amount) external view returns (uint256 feeAmount, uint256 netAmount) {
-        uint256 platformBps = tokenPlatformFeeBps(token);
-        if (platformBps == 0) {
-            platformBps = defaultPlatformFeeBps;
-        }
+    function calculateFee(uint256 amount) external view returns (uint256 feeAmount, uint256 netAmount) {
+        // Always use default platform fee (2%)
+        uint256 platformBps = defaultPlatformFeeBps;
 
         if (maxBps > 0) {
             feeAmount = (amount * platformBps) / maxBps;

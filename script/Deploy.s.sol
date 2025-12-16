@@ -70,7 +70,6 @@ contract Deploy is Script {
     {
         address platformWallet = vm.envAddress("PLATFORM_WALLET");
         address initialOwner = vm.envAddress("INITIAL_OWNER");
-        uint256 maxBps = vm.envUint("MAX_BPS");
         uint256 defaultPlatformFeeBps = vm.envUint("DEFAULT_PLATFORM_FEE_BPS");
         uint256 orderExpirationTime = vm.envUint("ORDER_EXPIRATION_TIME");
 
@@ -85,7 +84,7 @@ contract Deploy is Script {
             "PaymentProcessor.sol",
             abi.encodeCall(
                 PaymentProcessor.initialize,
-                (platformWallet, defaultPlatformFeeBps, merchantRegistryProxy, orderExpirationTime, maxBps)
+                (platformWallet, defaultPlatformFeeBps, merchantRegistryProxy, orderExpirationTime)
             )
         );
 
