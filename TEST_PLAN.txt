@@ -133,7 +133,6 @@
 
 #### M. FEE CALCULATION TESTS
 - testFeeCalculationWithDefaultFees() - Default fee application
-- testFeeCalculationWithTokenSpecificFees() - Token override behavior
 - testFeeCalculationWithZeroFees() - Zero fee handling
 - testFeeCalculationWithMaxFees() - Maximum fee handling
 - testFeeDistributionAccuracy() - Merchant vs platform split validation
@@ -253,7 +252,6 @@
 - testCreateOrderGasUsage() - Order creation efficiency
 - testPayOrderGasUsage() - Payment processing efficiency
 - testSettleOrderGasUsage() - Settlement processing efficiency
-- testBatchOperationsGasEfficiency() - Batch vs individual operations
 
 #### B. OPTIMIZATION VALIDATION TESTS
 - testStorageAccessOptimization() - Storage read/write efficiency

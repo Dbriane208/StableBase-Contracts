@@ -11,6 +11,8 @@ import {IMerchantRegistry} from "../../src/interfaces/IMerchantRegistry.sol";
 import {ERC20Mock} from "../../src/mocks/ERC20Mock.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {MaliciousReentrancyAttacker} from "../../src/mocks/MaliciousReentrancyAttacker.sol";
+import {MaliciousERC20} from "../../src/mocks/MaliciousERC20.sol";
 
 contract PaymentProcessorTest is Test {
     PaymentProcessor paymentProcessor;
@@ -23,6 +25,7 @@ contract PaymentProcessorTest is Test {
     address private owner = makeAddr("owner");
     address private merchant = makeAddr("merchant");
     address private payer = makeAddr("payer");
+    address private platformEmergencyWallet = makeAddr("merchantEWallet");
 
     uint256 constant DEFAULT_PLATFORM_FEE_BPS = 2000; // 2%
     uint256 constant ORDER_EXPIRATION_TIME = 86400; // 24 hours in seconds
@@ -172,6 +175,10 @@ contract PaymentProcessorTest is Test {
         assertEq(paymentProcessor.defaultPlatformFeeBps(), minFeeBps);
         assertEq(paymentProcessor.orderExpirationTime(), minExpirationTime);
     }
+
+    /* ##################################################################
+                                ORDER CREATION TESTS
+    ################################################################## */
 
     /**
      * @dev Order Creation tests
@@ -327,34 +334,9 @@ contract PaymentProcessorTest is Test {
      * @dev Pause state validation
      */
     function testCreateOrderRevertsWhenPaused() public {
-        _setupMerchantRegistryOwnership();
+        PaymentProcessor processor = emergencyTestHelper();
 
-        // Deploy PaymentProcessor implementation
-        PaymentProcessor impl = new PaymentProcessor();
-
-        // Deploy proxy with initialization
-        bytes memory initData = abi.encodeCall(
-            PaymentProcessor.initialize,
-            (platformWallet, DEFAULT_PLATFORM_FEE_BPS, address(merchantRegistry), ORDER_EXPIRATION_TIME)
-        );
-
-        paymentProcessor = PaymentProcessor(address(new ERC1967Proxy(address(impl), initData)));
-
-        address currentOwner = paymentProcessor.owner();
-
-        if (currentOwner == address(0)) {
-            // Try using the deployment script's pattern with a foundry cheatcode
-            vm.prank(address(0)); // Pretend to be address(0) to bypass ownership check
-            paymentProcessor.transferOwnership(address(this));
-            paymentProcessor.acceptOwnership();
-        } else if (currentOwner != address(this)) {
-            // If someone else is the owner, transfer to this contract
-            vm.prank(currentOwner);
-            paymentProcessor.transferOwnership(address(this));
-            paymentProcessor.acceptOwnership();
-        }
-
-        paymentProcessor.pause();
+        processor.pause();
 
         uint256 amount = toTokenAmount(10, IERC20(address(usdcToken))); // 100 USDC (with 6 decimals)
 
@@ -401,8 +383,11 @@ contract PaymentProcessorTest is Test {
         vm.stopPrank();
     }
 
+    /* ##################################################################
+                                PAYMENT TESTS
+    ################################################################## */
+
     /**
-     * @notice PAYMNENT TESTS
      * @dev Valid payment processing
      */
     function testPayOrderSuccess() public ownerDeploySetup {
@@ -587,34 +572,9 @@ contract PaymentProcessorTest is Test {
      * @dev Pause state validation
      */
     function testPayOrderRevertsWhenPaused() public ownerDeploySetup {
-        _setupMerchantRegistryOwnership();
+        PaymentProcessor processor = emergencyTestHelper();
 
-        // Deploy PaymentProcessor implementation
-        PaymentProcessor impl = new PaymentProcessor();
-
-        // Deploy proxy with initialization
-        bytes memory initData = abi.encodeCall(
-            PaymentProcessor.initialize,
-            (platformWallet, DEFAULT_PLATFORM_FEE_BPS, address(merchantRegistry), ORDER_EXPIRATION_TIME)
-        );
-
-        paymentProcessor = PaymentProcessor(address(new ERC1967Proxy(address(impl), initData)));
-
-        address currentOwner = paymentProcessor.owner();
-
-        if (currentOwner == address(0)) {
-            // Try using the deployment script's pattern with a foundry cheatcode
-            vm.prank(address(0)); // Pretend to be address(0) to bypass ownership check
-            paymentProcessor.transferOwnership(address(this));
-            paymentProcessor.acceptOwnership();
-        } else if (currentOwner != address(this)) {
-            // If someone else is the owner, transfer to this contract
-            vm.prank(currentOwner);
-            paymentProcessor.transferOwnership(address(this));
-            paymentProcessor.acceptOwnership();
-        }
-
-        paymentProcessor.pause();
+        processor.pause();
 
         uint256 amount = toTokenAmount(100, IERC20(address(usdtToken))); // 100 USDT (with 18 decimals)
 
@@ -727,8 +687,11 @@ contract PaymentProcessorTest is Test {
         paymentProcessor.payOrder(orderId);
     }
 
+    /* ##################################################################
+                                SETTLEMENT TESTS
+    ################################################################## */
+
     /**
-     * @notice SETTLEMENT TESTS
      * @dev Merchant settlement authorization
      */
     function testSettleOrderByMerchant() public ownerDeploySetup {
@@ -1036,92 +999,1220 @@ contract PaymentProcessorTest is Test {
         // settle the order
         paymentProcessor.settleOrder(orderId);
     }
+
     /**
-        * @dev Pause state validation
-        */
-        function testSettleOrderRevertsWhenPaused() public {
-           _setupMerchantRegistryOwnership();
+     * @dev Pause state validation
+     */
+    function testSettleOrderRevertsWhenPaused() public {
+        PaymentProcessor processor = emergencyTestHelper();
 
-           // Deploy PaymentProcessor implementation
-           PaymentProcessor impl = new PaymentProcessor();
+        uint256 amount = toTokenAmount(100, IERC20(address(usdtToken))); // 100 USDT (with 18 decimals)
 
-           // Deploy proxy with initialization
-           bytes memory initData = abi.encodeCall(
-              PaymentProcessor.initialize,
-              (platformWallet, DEFAULT_PLATFORM_FEE_BPS, address(merchantRegistry), ORDER_EXPIRATION_TIME)
-           );
+        bytes32 merchantId = merchantRegistry.registerMerchant(merchant, "ipfs://metadata.json");
 
-           paymentProcessor = PaymentProcessor(address(new ERC1967Proxy(address(impl), initData)));
+        // Verify the merchant
+        merchantRegistry.updateMerchantVerificationStatus(merchantId, IMerchantRegistry.VerificationStatus.VERIFIED);
 
-           address currentOwner = paymentProcessor.owner();
+        // Add USDT as supported token
+        paymentProcessor.setTokenSupport(address(usdtToken), 1);
 
-           if (currentOwner == address(0)) {
-              // Try using the deployment script's pattern with a foundry cheatcode
-              vm.prank(address(0)); // Pretend to be address(0) to bypass ownership check
-              paymentProcessor.transferOwnership(address(this));
-              paymentProcessor.acceptOwnership();
-           } else if (currentOwner != address(this)) {
-              // If someone else is the owner, transfer to this contract
-              vm.prank(currentOwner);
-              paymentProcessor.transferOwnership(address(this));
-              paymentProcessor.acceptOwnership();
-           }
+        bytes32 orderId =
+            paymentProcessor.createOrder(merchantId, address(usdtToken), amount, "ipfs://ordermetadata.json");
 
-           uint256 amount = toTokenAmount(100, IERC20(address(usdtToken))); // 100 USDT (with 18 decimals)
+        // Approve PaymentProcessor to spend tokens on behalf of this contract (the payer)
+        usdtToken.approve(address(paymentProcessor), amount);
 
-           bytes32 merchantId = merchantRegistry.registerMerchant(merchant, "ipfs://metadata.json");
+        // pay the order
+        paymentProcessor.payOrder(orderId);
 
-           // Verify the merchant
-           merchantRegistry.updateMerchantVerificationStatus(merchantId, IMerchantRegistry.VerificationStatus.VERIFIED);
+        // Pause the contract
+        processor.pause();
 
-           // Add USDT as supported token
-           paymentProcessor.setTokenSupport(address(usdtToken), 1);
+        // Expect revert when trying to settle while paused
+        vm.expectRevert();
+        paymentProcessor.settleOrder(orderId);
+    }
 
-           bytes32 orderId =
-              paymentProcessor.createOrder(merchantId, address(usdtToken), amount, "ipfs://ordermetadata.json");
+    /**
+     * @dev Authorization validation
+     */
+    function testSettleOrderRevertsWithUnauthorizedCaller() public ownerDeploySetup {
+        uint256 amount = toTokenAmount(100, IERC20(address(usdtToken))); // 100 USDT (with 18 decimals)
 
-           // Approve PaymentProcessor to spend tokens on behalf of this contract (the payer)
-           usdtToken.approve(address(paymentProcessor), amount);
+        bytes32 merchantId = merchantRegistry.registerMerchant(merchant, "ipfs://metadata.json");
 
-           // pay the order
-           paymentProcessor.payOrder(orderId);
+        // Verify the merchant
+        merchantRegistry.updateMerchantVerificationStatus(merchantId, IMerchantRegistry.VerificationStatus.VERIFIED);
 
-           // Pause the contract
-           paymentProcessor.pause();
+        // Add USDT as supported token
+        paymentProcessor.setTokenSupport(address(usdtToken), 1);
 
-           // Expect revert when trying to settle while paused
-           vm.expectRevert();
-           paymentProcessor.settleOrder(orderId);
-        }
+        bytes32 orderId =
+            paymentProcessor.createOrder(merchantId, address(usdtToken), amount, "ipfs://ordermetadata.json");
 
-        /**
-        * @dev Authorization validation
-        */
-        function testSettleOrderRevertsWithUnauthorizedCaller() public ownerDeploySetup {
-           uint256 amount = toTokenAmount(100, IERC20(address(usdtToken))); // 100 USDT (with 18 decimals)
+        // Approve PaymentProcessor to spend tokens on behalf of this contract (the payer)
+        usdtToken.approve(address(paymentProcessor), amount);
 
-           bytes32 merchantId = merchantRegistry.registerMerchant(merchant, "ipfs://metadata.json");
+        // pay the order
+        paymentProcessor.payOrder(orderId);
 
-           // Verify the merchant
-           merchantRegistry.updateMerchantVerificationStatus(merchantId, IMerchantRegistry.VerificationStatus.VERIFIED);
+        // Try to settle from unauthorized address (payer instead of merchant/owner)
+        vm.prank(payer);
+        vm.expectRevert();
+        paymentProcessor.settleOrder(orderId);
+    }
 
-           // Add USDT as supported token
-           paymentProcessor.setTokenSupport(address(usdtToken), 1);
+    /* ##################################################################
+                                REFUND TESTS
+    ################################################################## */
 
-           bytes32 orderId =
-              paymentProcessor.createOrder(merchantId, address(usdtToken), amount, "ipfs://ordermetadata.json");
+    /**
+     * @dev Merchant and Owner refund authorization
+     */
+    function testRefundOrderByMerchantAndOwner() public ownerDeploySetup {
+        uint256 amount = toTokenAmount(100, IERC20(address(usdtToken))); // 100 USDT (with 18 decimals)
 
-           // Approve PaymentProcessor to spend tokens on behalf of this contract (the payer)
-           usdtToken.approve(address(paymentProcessor), amount);
+        bytes32 merchantId = merchantRegistry.registerMerchant(merchant, "ipfs://metadata.json");
 
-           // pay the order
-           paymentProcessor.payOrder(orderId);
+        // Verify the merchant
+        merchantRegistry.updateMerchantVerificationStatus(merchantId, IMerchantRegistry.VerificationStatus.VERIFIED);
 
-           // Try to settle from unauthorized address (payer instead of merchant/owner)
-           vm.prank(payer);
-           vm.expectRevert();
-           paymentProcessor.settleOrder(orderId);
-        }
+        // Add USDT as supported token
+        paymentProcessor.setTokenSupport(address(usdtToken), 1);
+
+        bytes32 orderId =
+            paymentProcessor.createOrder(merchantId, address(usdtToken), amount, "ipfs://ordermetadata.json");
+
+        // Approve PaymentProcessor to spend tokens on behalf of this contract (the payer)
+        usdtToken.approve(address(paymentProcessor), amount);
+
+        // pay the order
+        paymentProcessor.payOrder(orderId);
+
+        // settle the order
+        paymentProcessor.settleOrder(orderId);
+
+        // Calculate the amounts that were distributed
+        uint256 feeAmount = (amount * DEFAULT_PLATFORM_FEE_BPS) / 100_000;
+        uint256 netAmount = amount - feeAmount;
+
+        // Merchant needs to approve the contract to pull back their tokens
+        vm.prank(merchant);
+        usdtToken.approve(address(paymentProcessor), netAmount);
+
+        // Platform wallet needs to approve the contract to pull back the fee
+        vm.prank(platformWallet);
+        usdtToken.approve(address(paymentProcessor), feeAmount);
+
+        // refund the order
+        bool success = paymentProcessor.refundOrder(orderId);
+
+        PaymentProcessor.Order memory refund = paymentProcessor.getOrder(orderId);
+
+        console2.log("Amount to be refunded: ", refund.amount);
+
+        // assertion
+        assertTrue(success);
+        assertEq(refund.amount, netAmount + feeAmount);
+    }
+
+    /**
+     * @dev Verify OrderRefunded event emission
+     */
+    function testRefundOrderEmitsEvent() public ownerDeploySetup {
+        uint256 amount = toTokenAmount(100, IERC20(address(usdtToken))); // 100 USDT (with 18 decimals)
+
+        bytes32 merchantId = merchantRegistry.registerMerchant(merchant, "ipfs://metadata.json");
+
+        // Verify the merchant
+        merchantRegistry.updateMerchantVerificationStatus(merchantId, IMerchantRegistry.VerificationStatus.VERIFIED);
+
+        // Add USDT as supported token
+        paymentProcessor.setTokenSupport(address(usdtToken), 1);
+
+        bytes32 orderId =
+            paymentProcessor.createOrder(merchantId, address(usdtToken), amount, "ipfs://ordermetadata.json");
+
+        // Approve PaymentProcessor to spend tokens on behalf of this contract (the payer)
+        usdtToken.approve(address(paymentProcessor), amount);
+
+        // pay the order
+        paymentProcessor.payOrder(orderId);
+
+        // settle the order
+        paymentProcessor.settleOrder(orderId);
+
+        // Calculate the amounts that were distributed
+        uint256 feeAmount = (amount * DEFAULT_PLATFORM_FEE_BPS) / 100_000;
+        uint256 netAmount = amount - feeAmount;
+
+        // Merchant needs to approve the contract to pull back their tokens
+        vm.prank(merchant);
+        usdtToken.approve(address(paymentProcessor), netAmount);
+
+        // Platform wallet needs to approve the contract to pull back the fee
+        vm.prank(platformWallet);
+        usdtToken.approve(address(paymentProcessor), feeAmount);
+
+        vm.expectEmit(true, true, false, false);
+
+        emit IPaymentProcessor.OrderRefunded(orderId, address(this), amount);
+
+        // refund the order
+        paymentProcessor.refundOrder(orderId);
+    }
+
+    /**
+     * @dev Status PAID -> REFUNDED
+     */
+    function testRefundOrderUpdatesStatus() public ownerDeploySetup {
+        uint256 amount = toTokenAmount(100, IERC20(address(usdtToken))); // 100 USDT (with 18 decimals)
+
+        bytes32 merchantId = merchantRegistry.registerMerchant(merchant, "ipfs://metadata.json");
+
+        // Verify the merchant
+        merchantRegistry.updateMerchantVerificationStatus(merchantId, IMerchantRegistry.VerificationStatus.VERIFIED);
+
+        // Add USDT as supported token
+        paymentProcessor.setTokenSupport(address(usdtToken), 1);
+
+        bytes32 orderId =
+            paymentProcessor.createOrder(merchantId, address(usdtToken), amount, "ipfs://ordermetadata.json");
+
+        // Approve PaymentProcessor to spend tokens on behalf of this contract (the payer)
+        usdtToken.approve(address(paymentProcessor), amount);
+
+        // pay the order
+        paymentProcessor.payOrder(orderId);
+
+        // settle the order
+        paymentProcessor.settleOrder(orderId);
+
+        // Calculate the amounts that were distributed
+        uint256 feeAmount = (amount * DEFAULT_PLATFORM_FEE_BPS) / 100_000;
+        uint256 netAmount = amount - feeAmount;
+
+        // Merchant needs to approve the contract to pull back their tokens
+        vm.prank(merchant);
+        usdtToken.approve(address(paymentProcessor), netAmount);
+
+        // Platform wallet needs to approve the contract to pull back the fee
+        vm.prank(platformWallet);
+        usdtToken.approve(address(paymentProcessor), feeAmount);
+
+        // refund the order
+        paymentProcessor.refundOrder(orderId);
+
+        PaymentProcessor.OrderStatus status = paymentProcessor.getOrderStatus(orderId);
+
+        PaymentProcessor.Order memory o = paymentProcessor.getOrder(orderId);
+
+        // assertions
+        assertEq(uint8(status), uint8(o.status));
+        assertEq(uint8(status), uint8(IPaymentProcessor.OrderStatus.REFUNDED));
+    }
+
+    /**
+     * @dev Order existence check
+     */
+    function testRefundOrderRevertsWithNonExistentOrder() public ownerDeploySetup {
+        uint256 amount = toTokenAmount(100, IERC20(address(usdtToken))); // 100 USDT (with 18 decimals)
+
+        bytes32 merchantId = merchantRegistry.registerMerchant(merchant, "ipfs://metadata.json");
+
+        // Verify the merchant
+        merchantRegistry.updateMerchantVerificationStatus(merchantId, IMerchantRegistry.VerificationStatus.VERIFIED);
+
+        // Add USDT as supported token
+        paymentProcessor.setTokenSupport(address(usdtToken), 1);
+
+        bytes32 orderId =
+            paymentProcessor.createOrder(merchantId, address(usdtToken), amount, "ipfs://ordermetadata.json");
+
+        // Approve PaymentProcessor to spend tokens on behalf of this contract (the payer)
+        usdtToken.approve(address(paymentProcessor), amount);
+
+        // pay the order
+        paymentProcessor.payOrder(orderId);
+
+        // settle the order
+        paymentProcessor.settleOrder(orderId);
+
+        // Calculate the amounts that were distributed
+        uint256 feeAmount = (amount * DEFAULT_PLATFORM_FEE_BPS) / 100_000;
+        uint256 netAmount = amount - feeAmount;
+
+        // Merchant needs to approve the contract to pull back their tokens
+        vm.prank(merchant);
+        usdtToken.approve(address(paymentProcessor), netAmount);
+
+        // Platform wallet needs to approve the contract to pull back the fee
+        vm.prank(platformWallet);
+        usdtToken.approve(address(paymentProcessor), feeAmount);
+
+        vm.expectRevert(PaymentProcessor.PaymentProcessor__OrderNotFound.selector);
+
+        // refund the order
+        paymentProcessor.refundOrder(bytes32(0));
+    }
+
+    /**
+     * @dev Status validation - should revert when status is CREATED (not PAID or SETTLED)
+     */
+    function testRefundOrderRevertsWithWrongStatus() public ownerDeploySetup {
+        uint256 amount = toTokenAmount(100, IERC20(address(usdtToken))); // 100 USDT (with 18 decimals)
+
+        bytes32 merchantId = merchantRegistry.registerMerchant(merchant, "ipfs://metadata.json");
+
+        // Verify the merchant
+        merchantRegistry.updateMerchantVerificationStatus(merchantId, IMerchantRegistry.VerificationStatus.VERIFIED);
+
+        // Add USDT as supported token
+        paymentProcessor.setTokenSupport(address(usdtToken), 1);
+
+        bytes32 orderId =
+            paymentProcessor.createOrder(merchantId, address(usdtToken), amount, "ipfs://ordermetadata.json");
+
+        // Order is in CREATED status - refund should fail
+        vm.expectRevert(PaymentProcessor.PaymentProcessor__InvalidStatus.selector);
+
+        // Try to refund an order that hasn't been paid yet (status is CREATED)
+        paymentProcessor.refundOrder(orderId);
+    }
+
+    /**
+     * @dev Status validation - should revert when trying to refund an already refunded order
+     */
+    function testRefundOrderRevertsWhenAlreadyRefunded() public ownerDeploySetup {
+        uint256 amount = toTokenAmount(100, IERC20(address(usdtToken))); // 100 USDT (with 18 decimals)
+
+        bytes32 merchantId = merchantRegistry.registerMerchant(merchant, "ipfs://metadata.json");
+
+        // Verify the merchant
+        merchantRegistry.updateMerchantVerificationStatus(merchantId, IMerchantRegistry.VerificationStatus.VERIFIED);
+
+        // Add USDT as supported token
+        paymentProcessor.setTokenSupport(address(usdtToken), 1);
+
+        bytes32 orderId =
+            paymentProcessor.createOrder(merchantId, address(usdtToken), amount, "ipfs://ordermetadata.json");
+
+        // Approve PaymentProcessor to spend tokens on behalf of this contract (the payer)
+        usdtToken.approve(address(paymentProcessor), amount);
+
+        // pay the order
+        paymentProcessor.payOrder(orderId);
+
+        // First refund should succeed
+        paymentProcessor.refundOrder(orderId);
+
+        // Verify status is now REFUNDED
+        PaymentProcessor.OrderStatus status = paymentProcessor.getOrderStatus(orderId);
+        assertEq(uint8(status), uint8(IPaymentProcessor.OrderStatus.REFUNDED));
+
+        // Second refund attempt should fail
+        vm.expectRevert(PaymentProcessor.PaymentProcessor__InvalidStatus.selector);
+        paymentProcessor.refundOrder(orderId);
+    }
+
+    /**
+     * @dev Pause state validation
+     */
+    function testRefundOrderRevertsWhenPaused() public {
+        PaymentProcessor processor = emergencyTestHelper();
+
+        uint256 amount = toTokenAmount(100, IERC20(address(usdtToken))); // 100 USDT (with 18 decimals)
+
+        bytes32 merchantId = merchantRegistry.registerMerchant(merchant, "ipfs://metadata.json");
+
+        // Verify the merchant
+        merchantRegistry.updateMerchantVerificationStatus(merchantId, IMerchantRegistry.VerificationStatus.VERIFIED);
+
+        // Add USDT as supported token
+        paymentProcessor.setTokenSupport(address(usdtToken), 1);
+
+        bytes32 orderId =
+            paymentProcessor.createOrder(merchantId, address(usdtToken), amount, "ipfs://ordermetadata.json");
+
+        // Approve PaymentProcessor to spend tokens on behalf of this contract (the payer)
+        usdtToken.approve(address(paymentProcessor), amount);
+
+        // pay the order
+        paymentProcessor.payOrder(orderId);
+
+        // settle the order
+        paymentProcessor.settleOrder(orderId);
+
+        // Calculate the amounts that were distributed
+        uint256 feeAmount = (amount * DEFAULT_PLATFORM_FEE_BPS) / 100_000;
+        uint256 netAmount = amount - feeAmount;
+
+        // Merchant needs to approve the contract to pull back their tokens
+        vm.prank(merchant);
+        usdtToken.approve(address(paymentProcessor), netAmount);
+
+        // Platform wallet needs to approve the contract to pull back the fee
+        vm.prank(platformWallet);
+        usdtToken.approve(address(paymentProcessor), feeAmount);
+
+        processor.pause();
+
+        // the paymentProcessor is paused
+        vm.expectRevert();
+
+        // refund the order
+        paymentProcessor.refundOrder(orderId);
+    }
+
+    /**
+     * @dev Authorization validation
+     */
+    function testRefundOrderRevertsWithUnauthorizedCaller() public ownerDeploySetup {
+        uint256 amount = toTokenAmount(100, IERC20(address(usdtToken))); // 100 USDT (with 18 decimals)
+
+        bytes32 merchantId = merchantRegistry.registerMerchant(merchant, "ipfs://metadata.json");
+
+        // Verify the merchant
+        merchantRegistry.updateMerchantVerificationStatus(merchantId, IMerchantRegistry.VerificationStatus.VERIFIED);
+
+        // Add USDT as supported token
+        paymentProcessor.setTokenSupport(address(usdtToken), 1);
+
+        bytes32 orderId =
+            paymentProcessor.createOrder(merchantId, address(usdtToken), amount, "ipfs://ordermetadata.json");
+
+        // Approve PaymentProcessor to spend tokens on behalf of this contract (the payer)
+        usdtToken.approve(address(paymentProcessor), amount);
+
+        // pay the order
+        paymentProcessor.payOrder(orderId);
+
+        // settle the order
+        paymentProcessor.settleOrder(orderId);
+
+        // Calculate the amounts that were distributed
+        uint256 feeAmount = (amount * DEFAULT_PLATFORM_FEE_BPS) / 100_000;
+        uint256 netAmount = amount - feeAmount;
+
+        // Merchant needs to approve the contract to pull back their tokens
+        vm.prank(merchant);
+        usdtToken.approve(address(paymentProcessor), netAmount);
+
+        // Platform wallet needs to approve the contract to pull back the fee
+        vm.prank(platformWallet);
+        usdtToken.approve(address(paymentProcessor), feeAmount);
+
+        vm.prank(payer);
+        vm.expectRevert();
+
+        // refund the order
+        paymentProcessor.refundOrder(orderId);
+    }
+
+    /* ##################################################################
+                                CANCELLATION TESTS
+    ################################################################## */
+    /**
+     * @dev Payer(address(this)) cancellation authorization
+     */
+    function testCancelOrderByPayer() public ownerDeploySetup {
+        uint256 amount = toTokenAmount(100, IERC20(address(usdtToken))); // 100 USDT (with 18 decimals)
+
+        bytes32 merchantId = merchantRegistry.registerMerchant(merchant, "ipfs://metadata.json");
+
+        // Verify the merchant
+        merchantRegistry.updateMerchantVerificationStatus(merchantId, IMerchantRegistry.VerificationStatus.VERIFIED);
+
+        // Add USDT as supported token
+        paymentProcessor.setTokenSupport(address(usdtToken), 1);
+
+        bytes32 orderId =
+            paymentProcessor.createOrder(merchantId, address(usdtToken), amount, "ipfs://ordermetadata.json");
+
+        // Merchant should be able to cancel their own order
+        paymentProcessor.cancelOrder(orderId);
+
+        // Verify the order was cancelled
+        PaymentProcessor.OrderStatus status = paymentProcessor.getOrderStatus(orderId);
+
+        // assert
+        assertEq(uint8(status), uint8(IPaymentProcessor.OrderStatus.CANCELLED));
+    }
+
+    /**
+     * @dev Merchant cannot cancel order - only payer can cancel
+     */
+    function testCancelOrderRevertsWhenCalledByMerchant() public ownerDeploySetup {
+        uint256 amount = toTokenAmount(100, IERC20(address(usdtToken))); // 100 USDT (with 18 decimals)
+
+        bytes32 merchantId = merchantRegistry.registerMerchant(merchant, "ipfs://metadata.json");
+
+        // Verify the merchant
+        merchantRegistry.updateMerchantVerificationStatus(merchantId, IMerchantRegistry.VerificationStatus.VERIFIED);
+
+        // Add USDT as supported token
+        paymentProcessor.setTokenSupport(address(usdtToken), 1);
+
+        bytes32 orderId =
+            paymentProcessor.createOrder(merchantId, address(usdtToken), amount, "ipfs://ordermetadata.json");
+
+        // Merchant should NOT be able to cancel - only payer can
+        vm.prank(merchant);
+        vm.expectRevert(PaymentProcessor.PaymentProcessor__UnauthorizedAccess.selector);
+        paymentProcessor.cancelOrder(orderId);
+    }
+
+    /**
+     * @dev Verify Order cancelled event emission
+     */
+    function testCancelOrderEmitsEvent() public ownerDeploySetup {
+        uint256 amount = toTokenAmount(100, IERC20(address(usdtToken))); // 100 USDT (with 18 decimals)
+
+        bytes32 merchantId = merchantRegistry.registerMerchant(merchant, "ipfs://metadata.json");
+
+        // Verify the merchant
+        merchantRegistry.updateMerchantVerificationStatus(merchantId, IMerchantRegistry.VerificationStatus.VERIFIED);
+
+        // Add USDT as supported token
+        paymentProcessor.setTokenSupport(address(usdtToken), 1);
+
+        bytes32 orderId =
+            paymentProcessor.createOrder(merchantId, address(usdtToken), amount, "ipfs://ordermetadata.json");
+
+        vm.expectEmit(true, true, false, true);
+
+        emit IPaymentProcessor.OrderCancelled(orderId, address(this), amount);
+
+        // cancel the order
+        paymentProcessor.cancelOrder(orderId);
+    }
+
+    /**
+     * @dev Status CREATED -> CANCELLED
+     */
+    function testCancelOrderUpdatesStatus() public ownerDeploySetup {
+        uint256 amount = toTokenAmount(100, IERC20(address(usdtToken))); // 100 USDT (with 18 decimals)
+
+        bytes32 merchantId = merchantRegistry.registerMerchant(merchant, "ipfs://metadata.json");
+
+        // Verify the merchant
+        merchantRegistry.updateMerchantVerificationStatus(merchantId, IMerchantRegistry.VerificationStatus.VERIFIED);
+
+        // Add USDT as supported token
+        paymentProcessor.setTokenSupport(address(usdtToken), 1);
+
+        bytes32 orderId =
+            paymentProcessor.createOrder(merchantId, address(usdtToken), amount, "ipfs://ordermetadata.json");
+
+        // cancel the order
+        paymentProcessor.cancelOrder(orderId);
+
+        // Verify the order was cancelled
+        PaymentProcessor.OrderStatus status = paymentProcessor.getOrderStatus(orderId);
+
+        // assert
+        assertEq(uint8(status), uint8(IPaymentProcessor.OrderStatus.CANCELLED));
+    }
+
+    /**
+     * @dev Order existence check
+     */
+    function testCancelOrderRevertsWithNonExistentOrder() public ownerDeploySetup {
+        uint256 amount = toTokenAmount(100, IERC20(address(usdtToken))); // 100 USDT (with 18 decimals)
+
+        bytes32 merchantId = merchantRegistry.registerMerchant(merchant, "ipfs://metadata.json");
+
+        // Verify the merchant
+        merchantRegistry.updateMerchantVerificationStatus(merchantId, IMerchantRegistry.VerificationStatus.VERIFIED);
+
+        // Add USDT as supported token
+        paymentProcessor.setTokenSupport(address(usdtToken), 1);
+
+        paymentProcessor.createOrder(merchantId, address(usdtToken), amount, "ipfs://ordermetadata.json");
+
+        vm.expectRevert(PaymentProcessor.PaymentProcessor__OrderNotFound.selector);
+
+        // cancel the order
+        paymentProcessor.cancelOrder(bytes32(0));
+    }
+
+    /**
+     * @dev Status validation (only CREATED)
+     */
+    function testCancelOrderRevertsWithWrongStatus() public ownerDeploySetup {
+        uint256 amount = toTokenAmount(100, IERC20(address(usdtToken))); // 100 USDT (with 18 decimals)
+
+        bytes32 merchantId = merchantRegistry.registerMerchant(merchant, "ipfs://metadata.json");
+
+        // Verify the merchant
+        merchantRegistry.updateMerchantVerificationStatus(merchantId, IMerchantRegistry.VerificationStatus.VERIFIED);
+
+        // Add USDT as supported token
+        paymentProcessor.setTokenSupport(address(usdtToken), 1);
+
+        bytes32 orderId =
+            paymentProcessor.createOrder(merchantId, address(usdtToken), amount, "ipfs://ordermetadata.json");
+
+        // cancel the order
+        paymentProcessor.cancelOrder(orderId);
+
+        vm.expectRevert(PaymentProcessor.PaymentProcessor__InvalidStatus.selector);
+
+        // cancel the order
+        paymentProcessor.cancelOrder(orderId);
+    }
+
+    /**
+     * @dev Pause state validation
+     */
+    function testCancelOrderRevertsWhenPaused() public {
+        PaymentProcessor processor = emergencyTestHelper();
+
+        uint256 amount = toTokenAmount(100, IERC20(address(usdtToken))); // 100 USDT (with 18 decimals)
+
+        bytes32 merchantId = merchantRegistry.registerMerchant(merchant, "ipfs://metadata.json");
+
+        // Verify the merchant
+        merchantRegistry.updateMerchantVerificationStatus(merchantId, IMerchantRegistry.VerificationStatus.VERIFIED);
+
+        // Add USDT as supported token
+        paymentProcessor.setTokenSupport(address(usdtToken), 1);
+
+        bytes32 orderId =
+            paymentProcessor.createOrder(merchantId, address(usdtToken), amount, "ipfs://ordermetadata.json");
+
+        // pause th contract
+        processor.pause();
+
+        vm.expectRevert();
+
+        // cancel the order
+        paymentProcessor.cancelOrder(orderId);
+    }
+
+    /**
+     * @dev Authorization validation
+     */
+    function testCancelOrderRevertsWithUnauthorizedCaller() public ownerDeploySetup {
+        uint256 amount = toTokenAmount(100, IERC20(address(usdtToken))); // 100 USDT (with 18 decimals)
+
+        bytes32 merchantId = merchantRegistry.registerMerchant(merchant, "ipfs://metadata.json");
+
+        // Verify the merchant
+        merchantRegistry.updateMerchantVerificationStatus(merchantId, IMerchantRegistry.VerificationStatus.VERIFIED);
+
+        // Add USDT as supported token
+        paymentProcessor.setTokenSupport(address(usdtToken), 1);
+
+        bytes32 orderId =
+            paymentProcessor.createOrder(merchantId, address(usdtToken), amount, "ipfs://ordermetadata.json");
+
+        vm.prank(merchant);
+        vm.expectRevert(PaymentProcessor.PaymentProcessor__UnauthorizedAccess.selector);
+        // cancel the order
+        paymentProcessor.cancelOrder(orderId);
+    }
+
+    /* ##################################################################
+                                EMERGENCY FUNCTION TESTS
+    ################################################################## */
+    /**
+     * @dev Emergency flag toggle
+     */
+    function testSetEmergencyWithdrawalEnabledEmit() public ownerDeploySetup {
+        vm.expectEmit(false, false, false, true);
+        emit IPaymentProcessor.EmergencyWithdrawalEnabledUpdated(true);
+        paymentProcessor.setEmergencyWithdrawalEnabled(true);
+    }
+
+    /**
+     * @dev Owner-Only validation
+     */
+    function testSetEmergencyWithdrawalEnabledRevertsWhenNotOwner() public ownerDeploySetup {
+        vm.prank(payer);
+        vm.expectRevert();
+        paymentProcessor.setEmergencyWithdrawalEnabled(true);
+    }
+
+    /* ##################################################################
+                                ADMIN FUNCTION TESTS
+    ################################################################## */
+    /**
+     * @dev Registry address update - successful update
+     */
+    function testUpdateMerchantRegistry() public ownerDeploySetup {
+        // Deploy a new MerchantRegistry
+        MerchantRegistry newMerchantRegistryImpl = new MerchantRegistry();
+        bytes memory newMerchantInitData = abi.encodeCall(MerchantRegistry.initialize, ());
+        MerchantRegistry newMerchantRegistry =
+            MerchantRegistry(address(new ERC1967Proxy(address(newMerchantRegistryImpl), newMerchantInitData)));
+
+        // Get old registry address
+        address oldRegistry = address(paymentProcessor.merchantRegistry());
+
+        // Expect the event to be emitted
+        vm.expectEmit(true, true, false, false);
+        emit IPaymentProcessor.MerchantRegistryUpdated(oldRegistry, address(newMerchantRegistry));
+
+        // Update the merchant registry
+        paymentProcessor.updateMerchantRegistry(address(newMerchantRegistry));
+
+        // Verify the registry was updated
+        assertEq(address(paymentProcessor.merchantRegistry()), address(newMerchantRegistry));
+        assertNotEq(address(paymentProcessor.merchantRegistry()), oldRegistry);
+    }
+
+    /**
+     * @dev Registry address update - reverts with zero address
+     */
+    function testUpdateMerchantRegistryRevertsWithZeroAddress() public ownerDeploySetup {
+        vm.expectRevert(PaymentProcessor.PaymentProcessor__ThrowZeroAddress.selector);
+        paymentProcessor.updateMerchantRegistry(address(0));
+    }
+
+    /**
+     * @dev Registry address update - reverts when called by non-owner
+     */
+    function testUpdateMerchantRegistryRevertsWithNonOwner() public ownerDeploySetup {
+        // Deploy a new MerchantRegistry
+        MerchantRegistry newMerchantRegistryImpl = new MerchantRegistry();
+        bytes memory newMerchantInitData = abi.encodeCall(MerchantRegistry.initialize, ());
+        MerchantRegistry newMerchantRegistry =
+            MerchantRegistry(address(new ERC1967Proxy(address(newMerchantRegistryImpl), newMerchantInitData)));
+
+        // Try to update from non-owner address
+        vm.prank(payer);
+        vm.expectRevert();
+        paymentProcessor.updateMerchantRegistry(address(newMerchantRegistry));
+    }
+
+    /**
+     * @dev Emergency token withdrawal
+     */
+    function testEmergencyWithdrawEmitSuccess() public {
+        PaymentProcessor processor = emergencyTestHelper();
+
+        uint256 amount = toTokenAmount(100, IERC20(address(usdtToken))); // 100 USDT (with 18 decimals)
+
+        bytes32 merchantId = merchantRegistry.registerMerchant(merchant, "ipfs://metadata.json");
+
+        // Verify the merchant
+        merchantRegistry.updateMerchantVerificationStatus(merchantId, IMerchantRegistry.VerificationStatus.VERIFIED);
+
+        // Add USDT as supported token
+        paymentProcessor.setTokenSupport(address(usdtToken), 1);
+
+        bytes32 orderId =
+            paymentProcessor.createOrder(merchantId, address(usdtToken), amount, "ipfs://ordermetadata.json");
+
+        // Approve PaymentProcessor to spend tokens on behalf of this contract (the payer)
+        usdtToken.approve(address(paymentProcessor), amount);
+
+        // pay the order
+        paymentProcessor.payOrder(orderId);
+
+        // Get the actual contract balance to withdraw
+        uint256 contractBalance = usdtToken.balanceOf(address(paymentProcessor));
+        console2.log("Contract's balance: ", contractBalance);
+
+        // Enable emergency withdrawal and pause
+        paymentProcessor.setEmergencyWithdrawalEnabled(true);
+
+        processor.pause();
+
+        vm.expectEmit(true, true, false, true);
+        emit IPaymentProcessor.EmergencyWithdrawalSuccess(address(usdtToken), platformEmergencyWallet, contractBalance);
+
+        paymentProcessor.emergencyWithdraw(address(usdtToken), platformEmergencyWallet, contractBalance);
+    }
+
+    /**
+     * @dev Enable flag validation
+     */
+    function testEmergencyWithdrawRevertsWhenDisabled() public {
+        PaymentProcessor processor = emergencyTestHelper();
+
+        uint256 amount = toTokenAmount(100, IERC20(address(usdtToken))); // 100 USDT (with 18 decimals)
+
+        bytes32 merchantId = merchantRegistry.registerMerchant(merchant, "ipfs://metadata.json");
+
+        // Verify the merchant
+        merchantRegistry.updateMerchantVerificationStatus(merchantId, IMerchantRegistry.VerificationStatus.VERIFIED);
+
+        // Add USDT as supported token
+        paymentProcessor.setTokenSupport(address(usdtToken), 1);
+
+        bytes32 orderId =
+            paymentProcessor.createOrder(merchantId, address(usdtToken), amount, "ipfs://ordermetadata.json");
+
+        // Approve PaymentProcessor to spend tokens on behalf of this contract (the payer)
+        usdtToken.approve(address(paymentProcessor), amount);
+
+        // pay the order
+        paymentProcessor.payOrder(orderId);
+
+        // Get the actual contract balance to withdraw
+        uint256 contractBalance = usdtToken.balanceOf(address(paymentProcessor));
+
+        processor.pause();
+
+        paymentProcessor.setEmergencyWithdrawalEnabled(false);
+
+        vm.expectRevert(PaymentProcessor.PaymentProcessor__EmergencyDisabled.selector);
+
+        paymentProcessor.emergencyWithdraw(address(usdtToken), platformEmergencyWallet, contractBalance);
+    }
+
+    /**
+     * @dev Owner-only validation
+     */
+    function testEmergencyWithdrawRevertsWhenNotOwner() public {
+        PaymentProcessor processor = emergencyTestHelper();
+
+        uint256 amount = toTokenAmount(100, IERC20(address(usdtToken))); // 100 USDT (with 18 decimals)
+
+        bytes32 merchantId = merchantRegistry.registerMerchant(merchant, "ipfs://metadata.json");
+
+        // Verify the merchant
+        merchantRegistry.updateMerchantVerificationStatus(merchantId, IMerchantRegistry.VerificationStatus.VERIFIED);
+
+        // Add USDT as supported token
+        paymentProcessor.setTokenSupport(address(usdtToken), 1);
+
+        bytes32 orderId =
+            paymentProcessor.createOrder(merchantId, address(usdtToken), amount, "ipfs://ordermetadata.json");
+
+        // Approve PaymentProcessor to spend tokens on behalf of this contract (the payer)
+        usdtToken.approve(address(paymentProcessor), amount);
+
+        // pay the order
+        paymentProcessor.payOrder(orderId);
+
+        // Get the actual contract balance to withdraw
+        uint256 contractBalance = usdtToken.balanceOf(address(paymentProcessor));
+
+        processor.pause();
+
+        paymentProcessor.setEmergencyWithdrawalEnabled(true);
+
+        vm.prank(payer);
+
+        vm.expectRevert();
+
+        paymentProcessor.emergencyWithdraw(address(usdtToken), platformEmergencyWallet, contractBalance);
+    }
+
+    /**
+     * @dev Address validation
+     */
+    function testEmergencyWithdrawRevertsWithZeroAddress() public {
+        PaymentProcessor processor = emergencyTestHelper();
+
+        uint256 amount = toTokenAmount(100, IERC20(address(usdtToken))); // 100 USDT (with 18 decimals)
+
+        bytes32 merchantId = merchantRegistry.registerMerchant(merchant, "ipfs://metadata.json");
+
+        // Verify the merchant
+        merchantRegistry.updateMerchantVerificationStatus(merchantId, IMerchantRegistry.VerificationStatus.VERIFIED);
+
+        // Add USDT as supported token
+        paymentProcessor.setTokenSupport(address(usdtToken), 1);
+
+        bytes32 orderId =
+            paymentProcessor.createOrder(merchantId, address(usdtToken), amount, "ipfs://ordermetadata.json");
+
+        // Approve PaymentProcessor to spend tokens on behalf of this contract (the payer)
+        usdtToken.approve(address(paymentProcessor), amount);
+
+        // pay the order
+        paymentProcessor.payOrder(orderId);
+
+        // Get the actual contract balance to withdraw
+        uint256 contractBalance = usdtToken.balanceOf(address(paymentProcessor));
+
+        processor.pause();
+
+        paymentProcessor.setEmergencyWithdrawalEnabled(true);
+
+        vm.expectRevert(PaymentProcessor.PaymentProcessor__ThrowZeroAddress.selector);
+        paymentProcessor.emergencyWithdraw(address(usdtToken), address(0), contractBalance);
+    }
+
+    /**
+     * @dev Balance validation
+     */
+    function testEmergencyWithdrawRevertsWithInsufficientBalance() public {
+        PaymentProcessor processor = emergencyTestHelper();
+
+        uint256 amount = toTokenAmount(100, IERC20(address(usdtToken))); // 100 USDT (with 18 decimals)
+        uint256 exceedAmount = amount + amount;
+
+        bytes32 merchantId = merchantRegistry.registerMerchant(merchant, "ipfs://metadata.json");
+
+        // Verify the merchant
+        merchantRegistry.updateMerchantVerificationStatus(merchantId, IMerchantRegistry.VerificationStatus.VERIFIED);
+
+        // Add USDT as supported token
+        paymentProcessor.setTokenSupport(address(usdtToken), 1);
+
+        bytes32 orderId =
+            paymentProcessor.createOrder(merchantId, address(usdtToken), amount, "ipfs://ordermetadata.json");
+
+        // Approve PaymentProcessor to spend tokens on behalf of this contract (the payer)
+        usdtToken.approve(address(paymentProcessor), amount);
+
+        // pay the order
+        paymentProcessor.payOrder(orderId);
+
+        processor.pause();
+
+        paymentProcessor.setEmergencyWithdrawalEnabled(true);
+
+        vm.expectRevert(PaymentProcessor.PaymentProcessor__InsufficientBalance.selector);
+        paymentProcessor.emergencyWithdraw(address(usdtToken), platformEmergencyWallet, exceedAmount);
+    }
+
+    /**
+     * @dev Token validation
+     */
+    function testEmergencyWithdrawRevertsWithInvalidToken() public {
+        PaymentProcessor processor = emergencyTestHelper();
+
+        uint256 amount = toTokenAmount(100, IERC20(address(usdtToken))); // 100 USDT (with 18 decimals)
+        uint256 exceedAmount = amount + amount;
+
+        bytes32 merchantId = merchantRegistry.registerMerchant(merchant, "ipfs://metadata.json");
+
+        // Verify the merchant
+        merchantRegistry.updateMerchantVerificationStatus(merchantId, IMerchantRegistry.VerificationStatus.VERIFIED);
+
+        // Add USDT as supported token
+        paymentProcessor.setTokenSupport(address(usdtToken), 1);
+
+        bytes32 orderId =
+            paymentProcessor.createOrder(merchantId, address(usdtToken), amount, "ipfs://ordermetadata.json");
+
+        // Approve PaymentProcessor to spend tokens on behalf of this contract (the payer)
+        usdtToken.approve(address(paymentProcessor), amount);
+
+        // pay the order
+        paymentProcessor.payOrder(orderId);
+
+        processor.pause();
+
+        paymentProcessor.setEmergencyWithdrawalEnabled(true);
+
+        vm.expectRevert(PaymentProcessor.PaymentProcessor__TokenNotAllowed.selector);
+        paymentProcessor.emergencyWithdraw(address(0), platformEmergencyWallet, exceedAmount);
+    }
+
+    /* ##################################################################
+                                VIEW FUNCTIONS TESTS
+    ################################################################## */
+
+    /**
+     * @dev Order data retrieval
+     */
+    function testGetOrderReturnsCorrectData() public ownerDeploySetup {
+        uint256 amount = toTokenAmount(100, IERC20(address(usdtToken))); // 100 USDT (with 18 decimals)
+
+        bytes32 merchantId = merchantRegistry.registerMerchant(merchant, "ipfs://metadata.json");
+
+        // Verify the merchant
+        merchantRegistry.updateMerchantVerificationStatus(merchantId, IMerchantRegistry.VerificationStatus.VERIFIED);
+
+        // Add USDT as supported token
+        paymentProcessor.setTokenSupport(address(usdtToken), 1);
+
+        bytes32 orderId =
+            paymentProcessor.createOrder(merchantId, address(usdtToken), amount, "ipfs://ordermetadata.json");
+
+        // Get the order and verify its fields
+        PaymentProcessor.Order memory o = paymentProcessor.getOrder(orderId);
+
+        // verify each field of the order
+        assertEq(o.merchantId, merchantId, "Merchant ID should match");
+        assertEq(o.payer, address(this), "Payer should be zero address (not paid yet)");
+        assertEq(o.token, address(usdtToken), "Token address should match");
+        assertEq(o.amount, amount, "Amount should match");
+        assertEq(uint8(o.status), uint8(IPaymentProcessor.OrderStatus.CREATED), "Status should be CREATED");
+        assertGt(o.createdAt, 0, "Created timestamp should be set");
+    }
+
+    /**
+     * @dev Token support status check
+     */
+    function testIsTokenSupportedReturnsCorrectStatus() public ownerDeploySetup {
+        // Initially, no tokens are supported
+        assertFalse(paymentProcessor.isTokenSupported(address(usdtToken)), "USDT should not be supported initially");
+        assertFalse(paymentProcessor.isTokenSupported(address(usdcToken)), "USDC should not be supported initially");
+        assertFalse(paymentProcessor.isTokenSupported(address(cusdToken)), "cUSD should not be supported initially");
+
+        // Add USDT as supported token
+        paymentProcessor.setTokenSupport(address(usdtToken), 1);
+        assertTrue(paymentProcessor.isTokenSupported(address(usdtToken)), "USDT should be supported after adding");
+        assertFalse(paymentProcessor.isTokenSupported(address(usdcToken)), "USDC should still not be supported");
+
+        // Add USDC as supported token
+        paymentProcessor.setTokenSupport(address(usdcToken), 1);
+        assertTrue(paymentProcessor.isTokenSupported(address(usdcToken)), "USDC should be supported after adding");
+        assertTrue(paymentProcessor.isTokenSupported(address(usdtToken)), "USDT should still be supported");
+
+        // Remove USDT support
+        paymentProcessor.setTokenSupport(address(usdtToken), 0);
+        assertFalse(paymentProcessor.isTokenSupported(address(usdtToken)), "USDT should not be supported after removal");
+        assertTrue(paymentProcessor.isTokenSupported(address(usdcToken)), "USDC should still be supported");
+
+        // Check zero address returns false
+        assertFalse(paymentProcessor.isTokenSupported(address(0)), "Zero address should not be supported");
+    }
+
+    /**
+     * @dev Balance calculation for the contract - verifies getContractTokenBalance returns correct balance
+     */
+    function testContractTokenBalance() public ownerDeploySetup {
+        uint256 amount = toTokenAmount(100, IERC20(address(usdtToken))); // 100 USDT (with 18 decimals)
+
+        bytes32 merchantId = merchantRegistry.registerMerchant(merchant, "ipfs://metadata.json");
+
+        // Verify the merchant
+        merchantRegistry.updateMerchantVerificationStatus(merchantId, IMerchantRegistry.VerificationStatus.VERIFIED);
+
+        // Add USDT as supported token
+        paymentProcessor.setTokenSupport(address(usdtToken), 1);
+
+        bytes32 orderId =
+            paymentProcessor.createOrder(merchantId, address(usdtToken), amount, "ipfs://ordermetadata.json");
+
+        // Initially, contract should have zero balance
+        assertEq(
+            paymentProcessor.getContractTokenBalance(address(usdtToken)),
+            0,
+            "Contract should have zero balance initially"
+        );
+
+        usdtToken.approve(address(paymentProcessor), amount);
+
+        paymentProcessor.payOrder(orderId);
+
+        // After payment, contract should hold the full amount before settlement
+        uint256 contractBalanceAfterPayment = usdtToken.balanceOf(address(paymentProcessor));
+        uint256 viewBalanceAfterPayment = paymentProcessor.getContractTokenBalance(address(usdtToken));
+
+        assertEq(contractBalanceAfterPayment, amount, "Contract should hold full payment amount");
+        assertEq(viewBalanceAfterPayment, contractBalanceAfterPayment, "View function should match actual balance");
+
+        paymentProcessor.settleOrder(orderId);
+
+        // After settlement, contract balance should be zero (all tokens distributed)
+        uint256 contractBalanceAfterSettlement = usdtToken.balanceOf(address(paymentProcessor));
+        uint256 viewBalanceAfterSettlement = paymentProcessor.getContractTokenBalance(address(usdtToken));
+
+        assertEq(contractBalanceAfterSettlement, 0, "Contract should have zero balance after settlement");
+        assertEq(
+            viewBalanceAfterSettlement,
+            contractBalanceAfterSettlement,
+            "View function should match actual balance after settlement"
+        );
+    }
+
+    /**
+     * @dev Balance calculation for merchants - verifies getMerchantTokenBalance returns correct balance
+     */
+    function testMerchantTokenBalance() public ownerDeploySetup {
+        uint256 amount = toTokenAmount(100, IERC20(address(usdtToken))); // 100 USDT (with 18 decimals)
+
+        bytes32 merchantId = merchantRegistry.registerMerchant(merchant, "ipfs://metadata.json");
+
+        // Verify the merchant
+        merchantRegistry.updateMerchantVerificationStatus(merchantId, IMerchantRegistry.VerificationStatus.VERIFIED);
+
+        // Add USDT as supported token
+        paymentProcessor.setTokenSupport(address(usdtToken), 1);
+
+        bytes32 orderId =
+            paymentProcessor.createOrder(merchantId, address(usdtToken), amount, "ipfs://ordermetadata.json");
+
+        // Initially, merchant should have zero balance
+        assertEq(
+            paymentProcessor.getMerchantTokenBalance(merchant, address(usdtToken)),
+            0,
+            "Merchant should have zero balance initially"
+        );
+
+        usdtToken.approve(address(paymentProcessor), amount);
+
+        paymentProcessor.payOrder(orderId);
+
+        paymentProcessor.settleOrder(orderId);
+
+        // After settlement, verify merchant received payment minus platform fee
+        uint256 expectedFee = (amount * DEFAULT_PLATFORM_FEE_BPS) / 100_000;
+        uint256 expectedMerchantAmount = amount - expectedFee;
+
+        uint256 merchantBalance = usdtToken.balanceOf(merchant);
+        uint256 viewBalance = paymentProcessor.getMerchantTokenBalance(merchant, address(usdtToken));
+
+        assertEq(merchantBalance, expectedMerchantAmount, "Merchant should receive amount minus platform fee");
+        assertEq(viewBalance, merchantBalance, "View function should match actual merchant balance");
+    }
+
+    /**
+     * @dev Balance calculation for platform - verifies getPlatformTokenBalance returns correct balance
+     */
+    function testPlatformTokenBalance() public ownerDeploySetup {
+        uint256 amount = toTokenAmount(100, IERC20(address(usdtToken))); // 100 USDT (with 18 decimals)
+
+        bytes32 merchantId = merchantRegistry.registerMerchant(merchant, "ipfs://metadata.json");
+
+        // Verify the merchant
+        merchantRegistry.updateMerchantVerificationStatus(merchantId, IMerchantRegistry.VerificationStatus.VERIFIED);
+
+        // Add USDT as supported token
+        paymentProcessor.setTokenSupport(address(usdtToken), 1);
+
+        bytes32 orderId =
+            paymentProcessor.createOrder(merchantId, address(usdtToken), amount, "ipfs://ordermetadata.json");
+
+        // Initially, platform should have zero balance
+        assertEq(
+            paymentProcessor.getPlatformTokenBalance(address(usdtToken)),
+            0,
+            "Platform should have zero balance initially"
+        );
+
+        usdtToken.approve(address(paymentProcessor), amount);
+
+        paymentProcessor.payOrder(orderId);
+
+        paymentProcessor.settleOrder(orderId);
+
+        // After settlement, verify platform received the correct fee
+        uint256 expectedFee = (amount * DEFAULT_PLATFORM_FEE_BPS) / 100_000;
+
+        uint256 platformBalance = usdtToken.balanceOf(platformWallet);
+        uint256 viewBalance = paymentProcessor.getPlatformTokenBalance(address(usdtToken));
+
+        assertEq(platformBalance, expectedFee, "Platform should receive the platform fee");
+        assertEq(viewBalance, platformBalance, "View function should match actual platform balance");
+    }
+
+    /* ##################################################################
+                                REENTRANCY TESTS
+    ################################################################## */
+    /**
+     * @dev Reentrancy protection - verifies nonReentrant modifier prevents reentrancy attacks on payOrder
+     * @notice This test creates a malicious ERC20 token that attempts reentrancy during transferFrom
+     */
+    function testCreateOrderPreventsReentrancy() public ownerDeploySetup {
+        // Deploy malicious ERC20 token with attacker as initial holder
+        uint256 amount = 100e18;
+        MaliciousERC20 maliciousToken = new MaliciousERC20("Malicious Token", "MAL", payer, amount * 2);
+
+        // Set the payment processor address in the malicious token
+        maliciousToken.setPaymentProcessor(address(paymentProcessor));
+
+        // Register and verify merchant
+        bytes32 merchantId = merchantRegistry.registerMerchant(merchant, "ipfs://metadata.json");
+        merchantRegistry.updateMerchantVerificationStatus(merchantId, IMerchantRegistry.VerificationStatus.VERIFIED);
+
+        // Add malicious token as supported token
+        paymentProcessor.setTokenSupport(address(maliciousToken), 1);
+
+        // Payer creates an order
+        vm.startPrank(payer);
+        bytes32 orderId = paymentProcessor.createOrder(merchantId, address(maliciousToken), amount, "ipfs://order.json");
+
+        // Payer approves the payment processor to spend tokens
+        maliciousToken.approve(address(paymentProcessor), amount);
+
+        // Configure the malicious token to attack during transferFrom
+        maliciousToken.setAttackParameters(true, orderId);
+
+        // Attempt to pay the order - the malicious token will try to reenter payOrder
+        // This should revert with ReentrancyGuard error
+        vm.expectRevert();
+        paymentProcessor.payOrder(orderId);
+
+        vm.stopPrank();
+    }
+
+    /**
+     * @dev Reentrancy protection - verifies nonReentrant modifier prevents reentrancy attacks on settleOrder
+     * @notice This test creates a malicious ERC20 token that attempts reentrancy during transfer
+     */
+    function testSettleOrderPreventsReentrancy() public ownerDeploySetup {
+        // Deploy malicious ERC20 token with payer as initial holder
+        uint256 amount = 100e18;
+        MaliciousERC20 maliciousToken = new MaliciousERC20("Malicious Token", "MAL", payer, amount * 2);
+
+        // Set the payment processor address in the malicious token
+        maliciousToken.setPaymentProcessor(address(paymentProcessor));
+
+        // Register and verify merchant
+        bytes32 merchantId = merchantRegistry.registerMerchant(merchant, "ipfs://metadata.json");
+        merchantRegistry.updateMerchantVerificationStatus(merchantId, IMerchantRegistry.VerificationStatus.VERIFIED);
+
+        // Add malicious token as supported token
+        paymentProcessor.setTokenSupport(address(maliciousToken), 1);
+
+        // Payer creates an order
+        vm.startPrank(payer);
+        bytes32 orderId = paymentProcessor.createOrder(merchantId, address(maliciousToken), amount, "ipfs://order.json");
+
+        // Payer approves the payment processor to spend tokens
+        maliciousToken.approve(address(paymentProcessor), amount);
+
+        // First, pay the order WITHOUT attack
+        paymentProcessor.payOrder(orderId);
+        vm.stopPrank();
+
+        // NOW configure the attack for settleOrder
+        maliciousToken.setAttackParameters(true, orderId);
+
+        // Settle as owner/test contract (not payer)
+        // This should revert with ReentrancyGuard error when malicious token tries to reenter
+        vm.expectRevert();
+        paymentProcessor.settleOrder(orderId);
+    }
+
+    /**
+     * @dev Reentrancy protection - verifies nonReentrant modifier prevents reentrancy attacks on refundOrder
+     * @notice This test creates a malicious ERC20 token that attempts reentrancy during transfer
+     */
+    function testRefundOrderPreventsReentrancy() public ownerDeploySetup {
+        // Deploy malicious ERC20 token with payer as initial holder
+        uint256 amount = 100e18;
+        MaliciousERC20 maliciousToken = new MaliciousERC20("Malicious Token", "MAL", payer, amount * 2);
+
+        // Set the payment processor address in the malicious token
+        maliciousToken.setPaymentProcessor(address(paymentProcessor));
+
+        // Register and verify merchant
+        bytes32 merchantId = merchantRegistry.registerMerchant(merchant, "ipfs://metadata.json");
+        merchantRegistry.updateMerchantVerificationStatus(merchantId, IMerchantRegistry.VerificationStatus.VERIFIED);
+
+        // Add malicious token as supported token
+        paymentProcessor.setTokenSupport(address(maliciousToken), 1);
+
+        // Payer creates an order
+        vm.startPrank(payer);
+        bytes32 orderId = paymentProcessor.createOrder(merchantId, address(maliciousToken), amount, "ipfs://order.json");
+
+        // Payer approves the payment processor to spend tokens
+        maliciousToken.approve(address(paymentProcessor), amount);
+
+        // First, pay the order WITHOUT attack
+        paymentProcessor.payOrder(orderId);
+        vm.stopPrank();
+
+        // NOW configure the attack for refundOrder
+        maliciousToken.setAttackParameters(true, orderId);
+
+        // Call refund as owner (test contract)
+        vm.expectRevert();
+        paymentProcessor.refundOrder(orderId);
+    }
 
     /* ##################################################################
                                 HELPER FUNCTIONS
@@ -1184,5 +2275,36 @@ contract PaymentProcessorTest is Test {
             merchantRegistry.transferOwnership(address(this));
             merchantRegistry.acceptOwnership();
         }
+    }
+
+    function emergencyTestHelper() internal returns (PaymentProcessor) {
+        _setupMerchantRegistryOwnership();
+
+        // Deploy PaymentProcessor implementation
+        PaymentProcessor impl = new PaymentProcessor();
+
+        // Deploy proxy with initialization
+        bytes memory initData = abi.encodeCall(
+            PaymentProcessor.initialize,
+            (platformWallet, DEFAULT_PLATFORM_FEE_BPS, address(merchantRegistry), ORDER_EXPIRATION_TIME)
+        );
+
+        paymentProcessor = PaymentProcessor(address(new ERC1967Proxy(address(impl), initData)));
+
+        address currentOwner = paymentProcessor.owner();
+
+        if (currentOwner == address(0)) {
+            // Try using the deployment script's pattern with a foundry cheatcode
+            vm.prank(address(0)); // Pretend to be address(0) to bypass ownership check
+            paymentProcessor.transferOwnership(address(this));
+            paymentProcessor.acceptOwnership();
+        } else if (currentOwner != address(this)) {
+            // If someone else is the owner, transfer to this contract
+            vm.prank(currentOwner);
+            paymentProcessor.transferOwnership(address(this));
+            paymentProcessor.acceptOwnership();
+        }
+
+        return paymentProcessor;
     }
 }

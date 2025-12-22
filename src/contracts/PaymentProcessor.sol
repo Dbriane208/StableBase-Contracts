@@ -3,6 +3,7 @@ pragma solidity ^0.8.13;
 
 import {IPaymentProcessor} from "../interfaces/IPaymentProcessor.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {PausableUpgradeable} from "openzeppelin-contracts-upgradeable/contracts/utils/PausableUpgradeable.sol";
@@ -31,19 +32,21 @@ contract PaymentProcessor is
     error PaymentProcessor__OrderAlreadyExists();
     error PaymentProcessor__OrderNotFound();
     error PaymentProcessor__InvalidStatus();
-    error PaymentProcessor__UnauthorizedPayer();
+    error PaymentProcessor__UnauthorizedAccess();
     error PaymentProcessor__TransferFailed();
     error PaymentProcessor__OrderExpired();
     error PaymentProcessor__InsufficientBalance();
     error PaymentProcessor__UnverifiedMerchant();
     error PaymentProcessor__EmergencyWithdrawalFailed();
+    error PaymentProcessor__InvalidToken();
+    error PaymentProcessor__EmergencyDisabled();
 
     // orders mapping
     mapping(bytes32 => Order) private order;
     mapping(address => uint256) private _nonce;
-    uint256[47] private _gap; // Reduced to accommodate new variables
+    uint256[47] private _gap;
 
-    // default platform fee in BPS when token -specific isn't set
+    // default platform fee in BPS
     uint256 public defaultPlatformFeeBps;
 
     // Order expiration time in seconds (default 24 hours)
@@ -199,7 +202,7 @@ contract PaymentProcessor is
         }
 
         if (msg.sender != o.payer) {
-            revert PaymentProcessor__UnauthorizedPayer();
+            revert PaymentProcessor__UnauthorizedAccess();
         }
 
         // Check if order has expired
@@ -246,7 +249,7 @@ contract PaymentProcessor is
 
         // allow merchant payout wallet or platform owner to trigger settlement
         if (msg.sender != o.merchantPayout && msg.sender != owner()) {
-            revert PaymentProcessor__UnauthorizedPayer();
+            revert PaymentProcessor__UnauthorizedAccess();
         }
 
         uint256 amount = o.amount;
@@ -288,26 +291,57 @@ contract PaymentProcessor is
     }
 
     /**
-     * @notice Refund a PAID (but not settled) order back to payer
-     * @dev Can be called by owner(platform) or merchant
+     * @notice Refund an order back to payer
+     * @dev Merchant refunds net amount, platform refunds fee
+     * Can be called by owner(platform) or merchant
      */
     function refundOrder(bytes32 _orderId) external nonReentrant whenNotPaused onlyExisting(_orderId) returns (bool) {
         Order storage o = order[_orderId];
 
-        if (o.status != OrderStatus.PAID) revert PaymentProcessor__InvalidStatus();
+        // Can refund from PAID (before settlement) or SETTLED (after settlement)
+        if (o.status != OrderStatus.PAID && o.status != OrderStatus.SETTLED) {
+            revert PaymentProcessor__InvalidStatus();
+        }
 
         // Only merchant or owner can refund
-        if (msg.sender != o.merchantPayout && msg.sender != owner()) revert PaymentProcessor__UnauthorizedPayer();
+        if (msg.sender != o.merchantPayout && msg.sender != owner()) {
+            revert PaymentProcessor__UnauthorizedAccess();
+        }
 
         uint256 amount = o.amount;
         address token = o.token;
 
+        // Calculate fee and net amount
+        uint256 platformBps = defaultPlatformFeeBps;
+        uint256 feeAmount = (amount * platformBps) / maxBps;
+        uint256 netAmount = amount - feeAmount;
+
+        // Save the original status before changing it
+        OrderStatus originalStatus = o.status;
+
         // EFFECTS
         o.status = OrderStatus.REFUNDED;
 
-        // INTERACTIONS: return funds to payer
-        bool ok = IERC20(token).transfer(o.payer, amount);
-        if (!ok) revert PaymentProcessor__TransferFailed();
+        // INTERACTIONS
+        if (originalStatus == OrderStatus.PAID) {
+            // Before settlement: funds are in contract, return full amount
+            bool ok = IERC20(token).transfer(o.payer, amount);
+            if (!ok) revert PaymentProcessor__TransferFailed();
+        } else {
+            // After settlement: merchant returns net, platform returns fee
+            // Merchant returns net amount (what they received)
+            bool merchantOk = IERC20(token).transferFrom(o.merchantPayout, address(this), netAmount);
+            if (!merchantOk) revert PaymentProcessor__TransferFailed();
+
+            // Platform returns fee
+            address platformAddr = getPlatformWallet();
+            bool platformOk = IERC20(token).transferFrom(platformAddr, address(this), feeAmount);
+            if (!platformOk) revert PaymentProcessor__TransferFailed();
+
+            // Send full amount to payer
+            bool payerOk = IERC20(token).transfer(o.payer, amount);
+            if (!payerOk) revert PaymentProcessor__TransferFailed();
+        }
 
         emit OrderRefunded(_orderId, o.payer, amount);
 
@@ -325,7 +359,7 @@ contract PaymentProcessor is
             revert PaymentProcessor__InvalidStatus();
         }
         if (msg.sender != o.payer) {
-            revert PaymentProcessor__UnauthorizedPayer();
+            revert PaymentProcessor__UnauthorizedAccess();
         }
 
         o.status = OrderStatus.CANCELLED;
@@ -333,24 +367,6 @@ contract PaymentProcessor is
         emit OrderCancelled(_orderId, o.payer, o.amount);
 
         return true;
-    }
-
-    /**
-     * @notice Batch cancel multiple orders (merchant only)
-     * @param orderIds Array of order IDs to cancel
-     */
-    function batchCancelOrders(bytes32[] calldata orderIds) external nonReentrant whenNotPaused {
-        for (uint256 i = 0; i < orderIds.length; i++) {
-            bytes32 orderId = orderIds[i];
-            if (!order[orderId].exists) continue;
-
-            Order storage o = order[orderId];
-            if (o.status != OrderStatus.CREATED) continue;
-            if (msg.sender != o.payer) continue;
-
-            o.status = OrderStatus.CANCELLED;
-            emit OrderCancelled(orderId, o.payer, o.amount);
-        }
     }
 
     /* ##################################################################
@@ -420,39 +436,17 @@ contract PaymentProcessor is
     ################################################################## */
     /**
      * @dev Emitted when the merchant registry is updated
-     * @param oldRegistry The address of the previous deployed contract
      * @param newRegistry The address of the new deployed contract
      */
-    event MerchantRegistryUpdated(address indexed oldRegistry, address indexed newRegistry);
-    event OrderExpirationTimeUpdated(uint256 oldTime, uint256 newTime);
-    event MaxSlippageBpsUpdated(uint256 oldSlippage, uint256 newSlippage);
-    event EmergencyWithdrawalEnabledUpdated(bool enabled);
-    event EmergencyWithdrawal(address indexed token, address indexed to, uint256 amount);
-    event OrderExpired(bytes32 indexed orderId, address indexed payer);
-
     function updateMerchantRegistry(address newRegistry) external onlyOwner {
         if (newRegistry == address(0)) {
             revert PaymentProcessor__ThrowZeroAddress();
         }
+
         address oldRegistry = address(merchantRegistry);
         merchantRegistry = MerchantRegistry(newRegistry);
+
         emit MerchantRegistryUpdated(oldRegistry, newRegistry);
-    }
-
-    /**
-     * @dev Emitted when the Default Platform Fee is overriden
-     * @param oldBps The previous fee the platform charged
-     * @param newBps The new fee the platform charged
-     */
-    event DefaultPlatformFeeBpsUpdated(uint256 oldBps, uint256 newBps);
-
-    function updateDefaultPlatformFeeBps(uint256 newBps) external onlyOwner {
-        if (newBps > maxBps) {
-            revert PaymentProcessor__InvalidAmount();
-        }
-        uint256 oldBps = defaultPlatformFeeBps;
-        defaultPlatformFeeBps = newBps;
-        emit DefaultPlatformFeeBpsUpdated(oldBps, newBps);
     }
 
     function setTokenSupport(address token, uint256 status) external onlyOwner {
@@ -478,23 +472,26 @@ contract PaymentProcessor is
      * @param to The address to withdraw to
      * @param amount The amount to withdraw
      */
-    function emergencyWithdraw(address token, address to, uint256 amount) external onlyOwner {
+    function emergencyWithdraw(address token, address to, uint256 amount) external onlyOwner whenPaused nonReentrant {
         if (!emergencyWithdrawalEnabled) {
-            revert PaymentProcessor__InvalidStatus();
+            revert PaymentProcessor__EmergencyDisabled();
         }
         if (to == address(0)) {
             revert PaymentProcessor__ThrowZeroAddress();
         }
-
-        if (token != address(0)) {
-            // Withdraw ERC20 token
-            bool success = IERC20(token).transfer(to, amount);
-            if (!success) {
-                revert PaymentProcessor__EmergencyWithdrawalFailed();
-            }
+        if (token == address(0) || !isTokenSupported(token)) {
+            revert PaymentProcessor__TokenNotAllowed();
         }
 
-        emit EmergencyWithdrawal(token, to, amount);
+        uint256 balance = IERC20(token).balanceOf(address(this));
+        if (amount == 0 || amount > balance) {
+            revert PaymentProcessor__InsufficientBalance();
+        }
+
+        // Use SafeERC20 to transfer
+        SafeERC20.safeTransfer(IERC20(token), to, amount);
+
+        emit EmergencyWithdrawalSuccess(token, to, amount);
     }
 
     /**
@@ -610,23 +607,5 @@ contract PaymentProcessor is
         uint256 expiryTime = o.createdAt + orderExpirationTime;
         if (block.timestamp >= expiryTime) return 0;
         return expiryTime - block.timestamp;
-    }
-
-    /**
-     * @notice Calculate fee for a given amount and token
-     * @param amount The amount to calculate fee for
-     * @return feeAmount The calculated fee amount
-     * @return netAmount The net amount after fee deduction
-     */
-    function calculateFee(uint256 amount) external view returns (uint256 feeAmount, uint256 netAmount) {
-        // Always use default platform fee (2%)
-        uint256 platformBps = defaultPlatformFeeBps;
-
-        if (maxBps > 0) {
-            feeAmount = (amount * platformBps) / maxBps;
-        } else {
-            feeAmount = 0;
-        }
-        netAmount = amount - feeAmount;
     }
 }

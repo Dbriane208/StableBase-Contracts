@@ -73,6 +73,48 @@ interface IPaymentProcessor {
      * @param amount The amount involved during cancellation
      */
     event OrderCancelled(bytes32 indexed orderId, address indexed payer, uint256 amount);
+
+    /**
+     * @notice Emitted when the merchant registry address is updated
+     * @param oldRegistry The address of the previous merchant registry contract
+     * @param newRegistry The address of the new merchant registry contract
+     */
+    event MerchantRegistryUpdated(address indexed oldRegistry, address indexed newRegistry);
+
+    /**
+     * @notice Emitted when the order expiration time is updated
+     * @param oldTime The previous expiration time in seconds
+     * @param newTime The new expiration time in seconds
+     */
+    event OrderExpirationTimeUpdated(uint256 oldTime, uint256 newTime);
+
+    /**
+     * @notice Emitted when the maximum slippage in basis points is updated
+     * @param oldSlippage The previous maximum slippage value in basis points
+     * @param newSlippage The new maximum slippage value in basis points
+     */
+    event MaxSlippageBpsUpdated(uint256 oldSlippage, uint256 newSlippage);
+
+    /**
+     * @notice Emitted when the emergency withdrawal feature is enabled or disabled
+     * @param enabled True if emergency withdrawal is enabled, false otherwise
+     */
+    event EmergencyWithdrawalEnabledUpdated(bool enabled);
+
+    /**
+     * @notice Emitted when an emergency withdrawal is executed
+     * @param token The address of the token being withdrawn (address(0) for native token)
+     * @param to The address receiving the withdrawn funds
+     * @param amount The amount of tokens withdrawn
+     */
+    event EmergencyWithdrawalSuccess(address indexed token, address indexed to, uint256 amount);
+
+    /**
+     * @notice Emitted when an order expires without being fulfilled
+     * @param orderId The unique identifier of the expired order
+     * @param payer The address of the user who created the expired order
+     */
+    event OrderExpired(bytes32 indexed orderId, address indexed payer);
     /* ##################################################################
                                STRUCTS/ENUMS
     ################################################################## */
