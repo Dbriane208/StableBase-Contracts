@@ -18,6 +18,7 @@ contract MerchantRegistry is IMerchantRegistry, PausableUpgradeable, Ownable2Ste
     error MerchantRegistry__InvalidMetadataUri();
     error MerchantRegistry__MerchantNotVerified();
     error MerchantRegistry__InvalidVerificationStatus();
+    error MerchantRegistry__UnverifiedMerchant();
 
     mapping(bytes32 => Merchant) private merchant;
     mapping(address => uint256) private _nonce;
@@ -107,6 +108,8 @@ contract MerchantRegistry is IMerchantRegistry, PausableUpgradeable, Ownable2Ste
     {
         Merchant storage m = merchant[_merchantId];
 
+        bool verified = isMerchantVerified(_merchantId);
+
         // Checks
         if (_payoutWallet == address(0)) {
             revert MerchantRegistry__ThrowZeroAddress();
@@ -123,6 +126,11 @@ contract MerchantRegistry is IMerchantRegistry, PausableUpgradeable, Ownable2Ste
         if (bytes(_metadataUri).length == 0) {
             revert MerchantRegistry__InvalidMetadataUri();
         }
+
+        if (!verified) {
+            revert MerchantRegistry__UnverifiedMerchant();
+        }
+
         // Effects
         m.payoutWallet = _payoutWallet;
         m.metadataURI = _metadataUri;
@@ -152,32 +160,6 @@ contract MerchantRegistry is IMerchantRegistry, PausableUpgradeable, Ownable2Ste
         emit MerchantVerificationStatusUpdated(_merchantId, oldStatus, _newStatus);
     }
 
-    /**
-     * @dev Batch update multiple merchants' verification status
-     * @param _merchantIds Array of merchant IDs
-     * @param _statuses Array of new verification statuses
-     */
-    function batchUpdateVerificationStatus(
-        bytes32[] calldata _merchantIds,
-        IMerchantRegistry.VerificationStatus[] calldata _statuses
-    ) external onlyOwner whenNotPaused {
-        if (_merchantIds.length != _statuses.length) {
-            revert MerchantRegistry__InvalidVerificationStatus();
-        }
-
-        for (uint256 i = 0; i < _merchantIds.length; i++) {
-            bytes32 merchantId = _merchantIds[i];
-            Merchant storage m = merchant[merchantId];
-
-            if (!m.exists) continue; // Skip non-existent merchants
-
-            IMerchantRegistry.VerificationStatus oldStatus = m.verificationStatus;
-            m.verificationStatus = _statuses[i];
-
-            emit MerchantVerificationStatusUpdated(merchantId, oldStatus, _statuses[i]);
-        }
-    }
-
     /* ##################################################################
                                    VIEW CALLS
        ################################################################## */
@@ -194,7 +176,7 @@ contract MerchantRegistry is IMerchantRegistry, PausableUpgradeable, Ownable2Ste
      * @param _merchantId The merchant ID to check
      * @return isVerified True if merchant is verified
      */
-    function isMerchantVerified(bytes32 _merchantId) external view returns (bool isVerified) {
+    function isMerchantVerified(bytes32 _merchantId) public view returns (bool isVerified) {
         if (!merchant[_merchantId].exists) return false;
         return merchant[_merchantId].verificationStatus == IMerchantRegistry.VerificationStatus.VERIFIED;
     }
