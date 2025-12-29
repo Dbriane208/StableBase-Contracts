@@ -221,8 +221,6 @@ Found a bug? [Open an issue](https://github.com/yourusername/StableBase-Contract
 - Reentrancy protection on all payment functions
 - Emergency pause functionality
 
-For security concerns, please email: security@yourdomain.com
-
 ## License
 
 MIT License - see [LICENSE](LICENSE) for details
