@@ -1,0 +1,9 @@
+{
+  "chainId": 84532,
+  "networkName": "base sepolia",
+  "paymentProcessor": "0x7c39408AC96a1b9a2722056eDE90b54D2B260380",
+  "merchantRegistry": "0x93e93Dfa36C87De32B9118CA5D9BAd1Db892002d",
+  "paymentProcessorImpl": "0x99AdeBA82459675B5eC08AA06e15fD257B09ffaB",
+  "merchantRegistryImpl": "0xd32C968Bd90c36da063004A7DAab0bA5bbC11fDc",
+  "deployedAt": 1766960070
+}

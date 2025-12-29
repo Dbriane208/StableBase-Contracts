@@ -17,11 +17,9 @@ contract MerchantRegistryTest is Test {
         // Deploy implementation
         MerchantRegistry impl = new MerchantRegistry();
 
-        // Deploy proxy initialized
-        bytes memory initData = abi.encodeCall(MerchantRegistry.initialize, ());
+        // Deploy proxy initialized with owner
+        bytes memory initData = abi.encodeCall(MerchantRegistry.initialize, (owner));
         registry = MerchantRegistry(address(new ERC1967Proxy(address(impl), initData)));
-
-        // Note: Owner will be address(0) after initialization
     }
 
     /* ##################################################################
@@ -33,15 +31,12 @@ contract MerchantRegistryTest is Test {
     }
 
     function _setUpMerchantOwnership() internal {
+        // Owner is set to 'owner' during initialization
+        // Transfer ownership to this test contract if needed
         address currentOwner = registry.owner();
 
-        if (currentOwner == address(0)) {
-            // If no owner is set, transfer ownership to this contract
-            vm.prank(address(0));
-            registry.transferOwnership(address(this));
-            registry.acceptOwnership();
-        } else if (currentOwner != address(this)) {
-            // If someone else is the owner, transfer to this contract
+        if (currentOwner != address(this)) {
+            // Transfer ownership from 'owner' to this contract
             vm.prank(currentOwner);
             registry.transferOwnership(address(this));
             registry.acceptOwnership();
@@ -505,14 +500,12 @@ contract MerchantRegistryTest is Test {
         vm.expectRevert();
 
         registry.registerMerchant(merchantpayoutaddress, "ipfs://metadata.json");
-
     }
 
     /**
      * @dev Test paused state prevents merchant updates
      */
     function testPausedStatePreventsUpdates() public merchantOwnership {
-  
         bytes32 merchantId = registry.registerMerchant(merchantpayoutaddress, "ipfs://metadata.json");
 
         registry.updateMerchantVerificationStatus(merchantId, IMerchantRegistry.VerificationStatus.VERIFIED);
@@ -547,7 +540,7 @@ contract MerchantRegistryTest is Test {
     function testContractInitializesCorrectly() public view {
         // Owner should be address(0) initially
         assertEq(registry.owner(), address(0));
-        
+
         // Contract should not be paused
         assertFalse(registry.paused());
     }
@@ -557,7 +550,7 @@ contract MerchantRegistryTest is Test {
      */
     function testCannotInitializeTwice() public {
         vm.expectRevert();
-        registry.initialize();
+        registry.initialize(owner);
     }
 
     /**
@@ -565,8 +558,8 @@ contract MerchantRegistryTest is Test {
      */
     function testImplementationCannotBeInitialized() public {
         MerchantRegistry impl = new MerchantRegistry();
-        
+
         vm.expectRevert();
-        impl.initialize();
+        impl.initialize(owner);
     }
 }

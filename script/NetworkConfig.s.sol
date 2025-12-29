@@ -124,7 +124,7 @@ contract NetworkConfig is Script {
         // Polygon Amoy
         networks[80002] = NetworkInfo({
             chainId: 80002,
-            name: "polygon amoy",
+            name: "polygon-amoy",
             usdc: 0x41E94Eb019C0762f9Bfcf9Fb1E58725BfB0e7582,
             usdt: address(0),
             cusd: address(0),
@@ -137,7 +137,7 @@ contract NetworkConfig is Script {
         // Arbitrum Sepolia
         networks[421614] = NetworkInfo({
             chainId: 421614,
-            name: "arbitrum sepolia",
+            name: "arbitrum-sepolia",
             usdc: 0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d,
             usdt: address(0),
             cusd: address(0),
@@ -150,7 +150,7 @@ contract NetworkConfig is Script {
         // Base Sepolia
         networks[84532] = NetworkInfo({
             chainId: 84532,
-            name: "base sepolia",
+            name: "base-sepolia",
             usdc: 0x036CbD53842c5426634e7929541eC2318f3dCF7e,
             usdt: address(0),
             cusd: address(0),

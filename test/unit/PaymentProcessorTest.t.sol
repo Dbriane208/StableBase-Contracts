@@ -2,7 +2,6 @@
 pragma solidity ^0.8.13;
 
 import {Test} from "forge-std/Test.sol";
-import {console} from "forge-std/console.sol";
 import {console2} from "forge-std/console2.sol";
 import {PaymentProcessor} from "../../src/contracts/PaymentProcessor.sol";
 import {MerchantRegistry} from "../../src/contracts/MerchantRegistry.sol";
@@ -11,7 +10,6 @@ import {IMerchantRegistry} from "../../src/interfaces/IMerchantRegistry.sol";
 import {ERC20Mock} from "../../src/mocks/ERC20Mock.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {MaliciousReentrancyAttacker} from "../../src/mocks/MaliciousReentrancyAttacker.sol";
 import {MaliciousERC20} from "../../src/mocks/MaliciousERC20.sol";
 
 contract PaymentProcessorTest is Test {
@@ -39,7 +37,7 @@ contract PaymentProcessorTest is Test {
 
         // Deploy MerchantRegistry with proxy
         MerchantRegistry merchantImpl = new MerchantRegistry();
-        bytes memory merchantInitData = abi.encodeCall(MerchantRegistry.initialize, ());
+        bytes memory merchantInitData = abi.encodeCall(MerchantRegistry.initialize, (address(this)));
         merchantRegistry = MerchantRegistry(address(new ERC1967Proxy(address(merchantImpl), merchantInitData)));
     }
 
@@ -58,7 +56,6 @@ contract PaymentProcessorTest is Test {
     /**
      * @dev Initialization tests
      */
-
     function testInitialize() public {
         // Deploy PaymentProcessor implementation
         PaymentProcessor impl = new PaymentProcessor();
@@ -66,7 +63,7 @@ contract PaymentProcessorTest is Test {
         // Deploy proxy with initialization
         bytes memory initData = abi.encodeCall(
             PaymentProcessor.initialize,
-            (platformWallet, DEFAULT_PLATFORM_FEE_BPS, address(merchantRegistry), ORDER_EXPIRATION_TIME)
+            (platformWallet, DEFAULT_PLATFORM_FEE_BPS, address(merchantRegistry), ORDER_EXPIRATION_TIME, address(this))
         );
 
         paymentProcessor = PaymentProcessor(address(new ERC1967Proxy(address(impl), initData)));
@@ -77,7 +74,7 @@ contract PaymentProcessorTest is Test {
         assertEq(paymentProcessor.orderExpirationTime(), ORDER_EXPIRATION_TIME);
         assertEq(paymentProcessor.emergencyWithdrawalEnabled(), false);
         assertEq(paymentProcessor.getPlatformWallet(), platformWallet);
-        // Note: Ownable2Step initializes with zero owner by default, ownership needs to be explicitly transferred
+        assertEq(paymentProcessor.owner(), address(this));
         assertEq(paymentProcessor.paused(), false);
     }
 
@@ -86,7 +83,7 @@ contract PaymentProcessorTest is Test {
 
         bytes memory initData = abi.encodeCall(
             PaymentProcessor.initialize,
-            (address(0), DEFAULT_PLATFORM_FEE_BPS, address(merchantRegistry), ORDER_EXPIRATION_TIME)
+            (address(0), DEFAULT_PLATFORM_FEE_BPS, address(merchantRegistry), ORDER_EXPIRATION_TIME, address(this))
         );
 
         vm.expectRevert(PaymentProcessor.PaymentProcessor__ThrowZeroAddress.selector);
@@ -99,7 +96,7 @@ contract PaymentProcessorTest is Test {
 
         bytes memory initData = abi.encodeCall(
             PaymentProcessor.initialize,
-            (platformWallet, invalidFeeBps, address(merchantRegistry), ORDER_EXPIRATION_TIME)
+            (platformWallet, invalidFeeBps, address(merchantRegistry), ORDER_EXPIRATION_TIME, address(this))
         );
 
         vm.expectRevert(PaymentProcessor.PaymentProcessor__InvalidAmount.selector);
@@ -110,7 +107,7 @@ contract PaymentProcessorTest is Test {
         PaymentProcessor impl = new PaymentProcessor();
 
         bytes memory initData = abi.encodeCall(
-            PaymentProcessor.initialize, (platformWallet, DEFAULT_PLATFORM_FEE_BPS, address(0), ORDER_EXPIRATION_TIME)
+            PaymentProcessor.initialize, (platformWallet, DEFAULT_PLATFORM_FEE_BPS, address(0), ORDER_EXPIRATION_TIME, address(this))
         );
 
         vm.expectRevert(PaymentProcessor.PaymentProcessor__ThrowZeroAddress.selector);
@@ -123,7 +120,7 @@ contract PaymentProcessorTest is Test {
 
         bytes memory initData = abi.encodeCall(
             PaymentProcessor.initialize,
-            (platformWallet, DEFAULT_PLATFORM_FEE_BPS, address(merchantRegistry), invalidExpirationTime)
+            (platformWallet, DEFAULT_PLATFORM_FEE_BPS, address(merchantRegistry), invalidExpirationTime, address(this))
         );
 
         vm.expectRevert(PaymentProcessor.PaymentProcessor__OrderExpired.selector);
@@ -136,14 +133,14 @@ contract PaymentProcessorTest is Test {
         // First initialization should succeed
         bytes memory initData = abi.encodeCall(
             PaymentProcessor.initialize,
-            (platformWallet, DEFAULT_PLATFORM_FEE_BPS, address(merchantRegistry), ORDER_EXPIRATION_TIME)
+            (platformWallet, DEFAULT_PLATFORM_FEE_BPS, address(merchantRegistry), ORDER_EXPIRATION_TIME, address(this))
         );
         paymentProcessor = PaymentProcessor(address(new ERC1967Proxy(address(impl), initData)));
 
         // Second initialization should fail with InvalidInitialization custom error
         vm.expectRevert();
         paymentProcessor.initialize(
-            platformWallet, DEFAULT_PLATFORM_FEE_BPS, address(merchantRegistry), ORDER_EXPIRATION_TIME
+            platformWallet, DEFAULT_PLATFORM_FEE_BPS, address(merchantRegistry), ORDER_EXPIRATION_TIME, address(this)
         );
     }
 
@@ -154,7 +151,7 @@ contract PaymentProcessorTest is Test {
 
         bytes memory initData = abi.encodeCall(
             PaymentProcessor.initialize,
-            (platformWallet, maxValidFeeBps, address(merchantRegistry), maxValidExpirationTime)
+            (platformWallet, maxValidFeeBps, address(merchantRegistry), maxValidExpirationTime, address(this))
         );
         paymentProcessor = PaymentProcessor(address(new ERC1967Proxy(address(impl), initData)));
 
@@ -168,7 +165,7 @@ contract PaymentProcessorTest is Test {
         uint256 minExpirationTime = 1; // 1 second
 
         bytes memory initData = abi.encodeCall(
-            PaymentProcessor.initialize, (platformWallet, minFeeBps, address(merchantRegistry), minExpirationTime)
+            PaymentProcessor.initialize, (platformWallet, minFeeBps, address(merchantRegistry), minExpirationTime, address(this))
         );
         paymentProcessor = PaymentProcessor(address(new ERC1967Proxy(address(impl), initData)));
 
@@ -371,7 +368,10 @@ contract PaymentProcessorTest is Test {
         uint256 payerBalance = usdcToken.balanceOf(payer);
         if (payerBalance >= amount) {
             // If payer somehow has enough tokens, transfer them away
-            usdcToken.transfer(address(0xdead), payerBalance);
+            bool ok = usdcToken.transfer(address(0xdead), payerBalance);
+            if (!ok) {
+                revert PaymentProcessor.PaymentProcessor__TransferFailed();
+            }
         }
 
         // Verify payer has insufficient balance
@@ -646,7 +646,10 @@ contract PaymentProcessorTest is Test {
         // Transfer away all tokens from this contract to ensure insufficient balance
         uint256 currentBalance = usdtToken.balanceOf(address(this));
         if (currentBalance > 0) {
-            usdtToken.transfer(address(0xdead), currentBalance);
+            bool ok = usdtToken.transfer(address(0xdead), currentBalance);
+            if (!ok) {
+                revert PaymentProcessor.PaymentProcessor__TransferFailed();
+            }
         }
 
         // Verify insufficient balance
@@ -1641,9 +1644,9 @@ contract PaymentProcessorTest is Test {
      * @dev Registry address update - successful update
      */
     function testUpdateMerchantRegistry() public ownerDeploySetup {
-        // Deploy a new MerchantRegistry
+        // Deploy a new MerchantRegistry with owner
         MerchantRegistry newMerchantRegistryImpl = new MerchantRegistry();
-        bytes memory newMerchantInitData = abi.encodeCall(MerchantRegistry.initialize, ());
+        bytes memory newMerchantInitData = abi.encodeCall(MerchantRegistry.initialize, (address(this)));
         MerchantRegistry newMerchantRegistry =
             MerchantRegistry(address(new ERC1967Proxy(address(newMerchantRegistryImpl), newMerchantInitData)));
 
@@ -1674,9 +1677,9 @@ contract PaymentProcessorTest is Test {
      * @dev Registry address update - reverts when called by non-owner
      */
     function testUpdateMerchantRegistryRevertsWithNonOwner() public ownerDeploySetup {
-        // Deploy a new MerchantRegistry
+        // Deploy a new MerchantRegistry with owner
         MerchantRegistry newMerchantRegistryImpl = new MerchantRegistry();
-        bytes memory newMerchantInitData = abi.encodeCall(MerchantRegistry.initialize, ());
+        bytes memory newMerchantInitData = abi.encodeCall(MerchantRegistry.initialize, (address(this)));
         MerchantRegistry newMerchantRegistry =
             MerchantRegistry(address(new ERC1967Proxy(address(newMerchantRegistryImpl), newMerchantInitData)));
 
@@ -2235,46 +2238,22 @@ contract PaymentProcessorTest is Test {
         // Deploy PaymentProcessor implementation
         PaymentProcessor impl = new PaymentProcessor();
 
-        // Deploy proxy with initialization
+        // Deploy proxy with initialization (this test contract is the owner)
         bytes memory initData = abi.encodeCall(
             PaymentProcessor.initialize,
-            (platformWallet, DEFAULT_PLATFORM_FEE_BPS, address(merchantRegistry), ORDER_EXPIRATION_TIME)
+            (platformWallet, DEFAULT_PLATFORM_FEE_BPS, address(merchantRegistry), ORDER_EXPIRATION_TIME, address(this))
         );
 
         paymentProcessor = PaymentProcessor(address(new ERC1967Proxy(address(impl), initData)));
-
-        address currentOwner = paymentProcessor.owner();
-
-        if (currentOwner == address(0)) {
-            // Try using the deployment script's pattern with a foundry cheatcode
-            vm.prank(address(0)); // Pretend to be address(0) to bypass ownership check
-            paymentProcessor.transferOwnership(address(this));
-            paymentProcessor.acceptOwnership();
-        } else if (currentOwner != address(this)) {
-            // If someone else is the owner, transfer to this contract
-            vm.prank(currentOwner);
-            paymentProcessor.transferOwnership(address(this));
-            paymentProcessor.acceptOwnership();
-        }
     }
 
     /**
      * @dev Helper function to setup MerchantRegistry ownership
+     * Owner is set to address(this) during initialization in setUp()
      */
     function _setupMerchantRegistryOwnership() internal {
-        address currentOwner = merchantRegistry.owner();
-
-        if (currentOwner == address(0)) {
-            // If no owner is set, transfer ownership to this contract
-            vm.prank(address(0));
-            merchantRegistry.transferOwnership(address(this));
-            merchantRegistry.acceptOwnership();
-        } else if (currentOwner != address(this)) {
-            // If someone else is the owner, transfer to this contract
-            vm.prank(currentOwner);
-            merchantRegistry.transferOwnership(address(this));
-            merchantRegistry.acceptOwnership();
-        }
+        // Owner is already set to address(this) during initialization
+        // This helper is kept for compatibility but no action needed
     }
 
     function emergencyTestHelper() internal returns (PaymentProcessor) {
@@ -2283,27 +2262,13 @@ contract PaymentProcessorTest is Test {
         // Deploy PaymentProcessor implementation
         PaymentProcessor impl = new PaymentProcessor();
 
-        // Deploy proxy with initialization
+        // Deploy proxy with initialization (this test contract is the owner)
         bytes memory initData = abi.encodeCall(
             PaymentProcessor.initialize,
-            (platformWallet, DEFAULT_PLATFORM_FEE_BPS, address(merchantRegistry), ORDER_EXPIRATION_TIME)
+            (platformWallet, DEFAULT_PLATFORM_FEE_BPS, address(merchantRegistry), ORDER_EXPIRATION_TIME, address(this))
         );
 
         paymentProcessor = PaymentProcessor(address(new ERC1967Proxy(address(impl), initData)));
-
-        address currentOwner = paymentProcessor.owner();
-
-        if (currentOwner == address(0)) {
-            // Try using the deployment script's pattern with a foundry cheatcode
-            vm.prank(address(0)); // Pretend to be address(0) to bypass ownership check
-            paymentProcessor.transferOwnership(address(this));
-            paymentProcessor.acceptOwnership();
-        } else if (currentOwner != address(this)) {
-            // If someone else is the owner, transfer to this contract
-            vm.prank(currentOwner);
-            paymentProcessor.transferOwnership(address(this));
-            paymentProcessor.acceptOwnership();
-        }
 
         return paymentProcessor;
     }

@@ -29,7 +29,7 @@ contract TokensManagerTest is Test {
     /**
      * @dev Test successful initialization
      */
-    function testTokensManagerInitSuccess() public {
+    function testTokensManagerInitSuccess() public view {
         // Verify maxBps was set correctly
         assertEq(tokensManager.getMaxBps(), DEFAULT_MAX_BPS, "MaxBps should be set to 100,000");
 

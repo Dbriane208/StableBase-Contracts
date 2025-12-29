@@ -36,7 +36,8 @@ contract MerchantRegistry is IMerchantRegistry, PausableUpgradeable, Ownable2Ste
     /**
      * @dev Initialize function
      */
-    function initialize() external initializer {
+    function initialize(address initialOwner) external initializer {
+        __Ownable_init(initialOwner);
         __Ownable2Step_init();
         __Pausable_init();
     }

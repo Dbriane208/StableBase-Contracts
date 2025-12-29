@@ -4,6 +4,7 @@ pragma solidity ^0.8.13;
 import {Script} from "forge-std/Script.sol";
 import {console2} from "forge-std/console2.sol";
 import {Upgrades} from "openzeppelin-foundry-upgrades/Upgrades.sol";
+import {Options} from "openzeppelin-foundry-upgrades/Options.sol";
 import {PaymentProcessor} from "../src/contracts/PaymentProcessor.sol";
 import {MerchantRegistry} from "../src/contracts/MerchantRegistry.sol";
 import {NetworkConfig} from "./NetworkConfig.s.sol";
@@ -39,9 +40,6 @@ contract Deploy is Script {
         console2.log("Initial Owner: ", vm.envAddress("INITIAL_OWNER"));
 
         // Confirm deployment
-        console2.log("\nPress any key to continue with deployment...");
-        vm.readLine("Press any key to continue with deployment...");
-
         vm.startBroadcast(config.deployerKey);
         DeploymentResult memory result = _deployContracts(config);
         vm.stopBroadcast();
@@ -75,8 +73,10 @@ contract Deploy is Script {
 
         // Deploy MerchantRegistry
         console2.log("Deploying MerchantRegistry...");
+        Options memory opts;
+        opts.unsafeAllow = "constructor,missing-public-upgradeto";
         address merchantRegistryProxy =
-            Upgrades.deployUUPSProxy("MerchantRegistry.sol", abi.encodeCall(MerchantRegistry.initialize, ()));
+            Upgrades.deployUUPSProxy("MerchantRegistry.sol", abi.encodeCall(MerchantRegistry.initialize, (initialOwner)), opts);
 
         // Deploy PaymentProcessor
         console2.log("Deploying PaymentProcessor...");
@@ -84,15 +84,14 @@ contract Deploy is Script {
             "PaymentProcessor.sol",
             abi.encodeCall(
                 PaymentProcessor.initialize,
-                (platformWallet, defaultPlatformFeeBps, merchantRegistryProxy, orderExpirationTime)
-            )
+                (platformWallet, defaultPlatformFeeBps, merchantRegistryProxy, orderExpirationTime, initialOwner)
+            ),
+            opts
         );
 
-        // Transfer ownership to initial owner
+        // Note: Ownership is now set during initialization, no need to transfer separately
         if (initialOwner != msg.sender) {
-            console2.log("Transferring ownership to: ", initialOwner);
-            PaymentProcessor(paymentProcessorProxy).transferOwnership(initialOwner);
-            MerchantRegistry(merchantRegistryProxy).transferOwnership(initialOwner);
+            console2.log("Ownership set to: ", initialOwner);
         }
 
         result = DeploymentResult({

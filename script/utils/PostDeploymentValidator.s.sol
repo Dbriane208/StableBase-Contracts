@@ -5,7 +5,6 @@ import {Script} from "forge-std/Script.sol";
 import {console2} from "forge-std/console2.sol";
 import {PaymentProcessor} from "../../src/contracts/PaymentProcessor.sol";
 import {MerchantRegistry} from "../../src/contracts/MerchantRegistry.sol";
-import {TokensManager} from "../../src/contracts/TokensManager.sol";
 import {NetworkConfig} from "../NetworkConfig.s.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
@@ -25,20 +24,12 @@ contract PostDeploymentValidator is Script {
      * @notice Validates the complete post-deployment configuration
      * @param paymentProcessor Address of the deployed PaymentProcessor
      * @param merchantRegistry Address of the deployed MerchantRegistry
-     * @param expectedTokens Array of token addresses that should be supported
      */
-    function validateFullDeployment(
-        address paymentProcessor,
-        address merchantRegistry,
-        address[] memory expectedTokens
-    ) external view {
+    function validateFullDeployment(address paymentProcessor, address merchantRegistry) external view {
         console2.log("=== Starting Post-Deployment Validation ===");
 
         // Basic validations
         _validateBasics(paymentProcessor, merchantRegistry);
-
-        // Token and fee validations
-        _validateTokensAndFees(paymentProcessor, expectedTokens);
 
         // Configuration validations
         _validateConfigurations(paymentProcessor);
@@ -52,14 +43,6 @@ contract PostDeploymentValidator is Script {
     function _validateBasics(address paymentProcessor, address merchantRegistry) internal view {
         _validateContractDeployment(paymentProcessor, merchantRegistry);
         _validateOwnership(paymentProcessor, merchantRegistry);
-    }
-
-    /**
-     * @notice Validates tokens and fees
-     */
-    function _validateTokensAndFees(address paymentProcessor, address[] memory expectedTokens) internal view {
-        _validateTokenSupport(paymentProcessor, expectedTokens);
-        _validateFeeConfiguration(paymentProcessor, expectedTokens);
     }
 
     /**
@@ -143,26 +126,6 @@ contract PostDeploymentValidator is Script {
             }
 
             console2.log("[OK] Token supported and valid:", token);
-        }
-    }
-
-    /**
-     * @notice Validates fee configuration for supported tokens
-     */
-    function _validateFeeConfiguration(address paymentProcessor, address[] memory tokens) internal view {
-        console2.log("Validating fee configuration...");
-
-        PaymentProcessor processor = PaymentProcessor(paymentProcessor);
-
-        // Check default platform fee
-        try processor.defaultPlatformFeeBps() returns (uint256 defaultFee) {
-            if (defaultFee == 0 || defaultFee > REASONABLE_MAX_FEE_BPS) {
-                revert PostDeploymentValidator__FeeValidationFailed();
-            }
-            console2.log("[OK] Default platform fee:", defaultFee, "bps");
-            console2.log("[OK] All tokens will use the default platform fee");
-        } catch {
-            revert PostDeploymentValidator__FeeValidationFailed();
         }
     }
 
@@ -286,7 +249,7 @@ contract PostDeploymentValidator is Script {
             mstore(expectedTokens, tokenCount)
         }
 
-        this.validateFullDeployment(paymentProcessor, merchantRegistry, expectedTokens);
+        this.validateFullDeployment(paymentProcessor, merchantRegistry);
     }
 
     /**

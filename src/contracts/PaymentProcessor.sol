@@ -69,7 +69,8 @@ contract PaymentProcessor is
         address _platformWallet,
         uint256 _defaultPlatformFeeBps,
         address _merchantRegistry,
-        uint256 _orderExpirationTime
+        uint256 _orderExpirationTime,
+        address initialOwner
     ) external initializer {
         maxBps = 100_000;
 
@@ -87,6 +88,7 @@ contract PaymentProcessor is
         }
 
         // initialize inherited contracts
+        __Ownable_init(initialOwner);
         __Ownable2Step_init();
         __Pausable_init();
         _tokensManagerInit(maxBps, _platformWallet);
@@ -402,22 +404,20 @@ contract PaymentProcessor is
         }
 
         uint256 minAmount;
+        uint256 maxAmount;
         if (decimals == 6) {
-            minAmount = 10000; // 0.01 for 6 decimal tokens
+            minAmount = 500000; // 0.5 USD for 6 decimal tokens (0.5 * 10^6)
+            maxAmount = 100000000000; // 100,000 USD for 6 decimal tokens (100000 * 10^6)
         } else if (decimals == 18) {
-            minAmount = 10 ** 16; // 0.01 for 18 decimal tokens
+            minAmount = 5 * 10 ** 17; // 0.5 USD for 18 decimal tokens (0.5 * 10^18)
+            maxAmount = 100000 * 10 ** 18; // 100,000 USD for 18 decimal tokens
         } else {
-            // For other decimal places, calculate minimum as 0.01
-            minAmount = 10 ** (decimals - 2);
+            // For other decimal places, calculate minimum as 0.5 USD and max as 100,000 USD
+            minAmount = 5 * 10 ** (decimals - 1); // 0.5
+            maxAmount = 100000 * 10 ** decimals; // 100,000
         }
 
-        if (_amount < minAmount) {
-            revert PaymentProcessor__InvalidAmount();
-        }
-
-        // Enhanced validation: check for reasonable amount limits
-        // Prevent extremely large amounts that could cause overflow
-        if (_amount > type(uint128).max) {
+        if (_amount < minAmount || _amount > maxAmount) {
             revert PaymentProcessor__InvalidAmount();
         }
 
