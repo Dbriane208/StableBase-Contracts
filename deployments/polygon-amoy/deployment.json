@@ -1,0 +1,9 @@
+{
+  "chainId": 80002,
+  "networkName": "polygon-amoy",
+  "paymentProcessor": "0xc7597afad614f4b738D808BBAA9958A1Bac485E4",
+  "merchantRegistry": "0x3B08Be115E1672cE8A6618D932a97B2Cc251d853",
+  "paymentProcessorImpl": "0x7A4b1eBBCdAdDA517C7F59Ba4cC57da2f77AdBD2",
+  "merchantRegistryImpl": "0x0D46F92f22382594010bdfDAC78484e6420a02Ff",
+  "deployedAt": 1767293104
+}
